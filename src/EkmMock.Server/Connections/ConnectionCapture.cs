@@ -1,6 +1,7 @@
 using System.Net.Security;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using EkmMock.Server.Metrics;
 using EkmMock.Server.Tls;
 using Microsoft.AspNetCore.Connections;
 using Microsoft.AspNetCore.Connections.Features;

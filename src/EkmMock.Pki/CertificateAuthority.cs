@@ -13,7 +13,8 @@ public enum PkiKeyAlgorithm
 
 /// <summary>
 /// A certificate together with its private key, as produced by <see cref="CertificateAuthority"/>. <see cref="Certificate"/> has an
-/// accessible private key on every OS (on Windows the key is re-imported from PFX bytes into a regular key container, which SChannel needs).
+/// accessible private key on every OS. Leaf certificates (server, client) get a regular key container on Windows, which SChannel needs and which is deleted when
+/// the certificate is disposed: <b>dispose them</b> (a CA's certificate has an ephemeral key and leaves nothing behind).
 /// This is test PKI only: keys are generated in memory and are meant to be written to a temp folder or a test data volume.
 /// </summary>
 public sealed class IssuedCertificate : IDisposable
@@ -120,7 +121,7 @@ public sealed class CertificateAuthority : IDisposable
         request.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(request.PublicKey, critical: false));
 
         using var selfSigned = request.CreateSelfSigned(start, end);
-        var issued = Materialize(selfSigned, key, []);
+        var issued = Materialize(selfSigned, key, [], persistKey: false);
         return new CertificateAuthority(issued, algorithm, isRoot: true);
     }
 
@@ -134,7 +135,7 @@ public sealed class CertificateAuthority : IDisposable
         request.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(request.PublicKey, critical: false));
         request.CertificateExtensions.Add(X509AuthorityKeyIdentifierExtension.CreateFromCertificate(Certificate, includeKeyIdentifier: true, includeIssuerAndSerial: false));
 
-        return new CertificateAuthority(Sign(request, key, start, end), _algorithm, isRoot: false);
+        return new CertificateAuthority(Sign(request, key, start, end, persistKey: false), _algorithm, isRoot: false);
     }
 
     /// <summary>
@@ -233,10 +234,10 @@ public sealed class CertificateAuthority : IDisposable
         return (start < issuerStart ? issuerStart : start, end > issuerEnd ? issuerEnd : end);
     }
 
-    private IssuedCertificate Sign(CertificateRequest request, AsymmetricAlgorithm key, DateTimeOffset start, DateTimeOffset end)
+    private IssuedCertificate Sign(CertificateRequest request, AsymmetricAlgorithm key, DateTimeOffset start, DateTimeOffset end, bool persistKey = true)
     {
         using var signed = request.Create(Certificate, start, end, NewSerial());
-        return Materialize(signed, key, ChainForIssued());
+        return Materialize(signed, key, ChainForIssued(), persistKey);
     }
 
     private static AsymmetricAlgorithm NewKey(PkiKeyAlgorithm algorithm, out CertificateRequest request, X500DistinguishedName subject)
@@ -283,8 +284,16 @@ public sealed class CertificateAuthority : IDisposable
         _ => throw new InvalidOperationException("Unsupported key type"),
     };
 
-    /// <summary>Attaches the key and, for an accessible key on every OS, re-imports the certificate from PFX bytes.</summary>
-    private static IssuedCertificate Materialize(X509Certificate2 certificate, AsymmetricAlgorithm key, IReadOnlyList<string> intermediatePems)
+    /// <summary>
+    /// Attaches the key and re-imports the certificate from PFX bytes. <paramref name="persistKey"/> decides where the key lives (see DECISIONS.md "M7: Windows key container leak"):
+    /// <list type="bullet">
+    /// <item><c>true</c> (certificates a TLS stack will use, server and client leaves): a regular key container. SChannel cannot use ephemeral keys for TLS ("the platform does not
+    /// support ephemeral keys"), so on Windows this creates a key file in the user's CNG store that is deleted when the certificate is <em>disposed</em> (and only then: a process that
+    /// exits without disposing leaves it behind). Always dispose issued leaf certificates.</item>
+    /// <item><c>false</c> (CA certificates, which only sign): an ephemeral, in-memory key. No file is ever created.</item>
+    /// </list>
+    /// </summary>
+    private static IssuedCertificate Materialize(X509Certificate2 certificate, AsymmetricAlgorithm key, IReadOnlyList<string> intermediatePems, bool persistKey = true)
     {
         var privateKeyPem = key.ExportPkcs8PrivateKeyPem();
 
@@ -292,9 +301,8 @@ public sealed class CertificateAuthority : IDisposable
         using var publicPart = X509CertificateLoader.LoadCertificate(certificate.RawData);
         using var withKey = AttachKey(publicPart, key);
 
-        // SChannel cannot use ephemeral keys for TLS; a PFX round trip gives the certificate a regular (disposable) key container.
         var pfx = withKey.Export(X509ContentType.Pfx);
-        var usable = X509CertificateLoader.LoadPkcs12(pfx, null, X509KeyStorageFlags.Exportable);
+        var usable = X509CertificateLoader.LoadPkcs12(pfx, null, persistKey ? X509KeyStorageFlags.Exportable : X509KeyStorageFlags.EphemeralKeySet);
         CryptographicOperations.ZeroMemory(pfx);
         return new IssuedCertificate(usable, privateKeyPem, intermediatePems);
     }

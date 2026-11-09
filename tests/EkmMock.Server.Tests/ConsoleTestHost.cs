@@ -82,7 +82,11 @@ internal sealed class ConsoleTestHost : IAsyncDisposable
         bool plainListener = false,
         string? groupId = null,
         Dictionary<string, string?>? configuration = null,
-        bool allowKeyImport = false)
+        bool allowKeyImport = false,
+        bool faults = false,
+        EkmMock.Server.Faults.IFaultRandom? faultRandom = null,
+        Microsoft.Extensions.Logging.LogLevel? minLogLevel = null,
+        Action<IServiceCollection>? configureServices = null)
     {
         if (entra)
         {
@@ -120,9 +124,17 @@ internal sealed class ConsoleTestHost : IAsyncDisposable
             AddPlainHttpListener = plainListener,
             AllowKeyImport = allowKeyImport,
             Configuration = config,
+            MinLogLevel = minLogLevel,
             Namespaces = [TestNamespace.Default(pki.ClientCaA, ClientCn)],
             ConfigureServices = services =>
             {
+                // Fault injection is off in every test host unless the test asks for it, whatever EKMMOCK_ENABLE_FAULTS says in the environment of the test process.
+                services.AddSingleton<EkmMock.Server.Faults.IFaultGate>(new FixedFaultGate(faults));
+                if (faultRandom is not null)
+                {
+                    services.AddSingleton(faultRandom);
+                }
+
                 if (entra)
                 {
                     services.AddAuthentication().AddScheme<AuthenticationSchemeOptions, TestAuthHandler>(TestAuthHandler.SchemeName, null);
@@ -139,6 +151,8 @@ internal sealed class ConsoleTestHost : IAsyncDisposable
                 {
                     services.AddSingleton<IInspectorRevealGate>(new TestRevealGate(true));
                 }
+
+                configureServices?.Invoke(services);
             },
         });
         host.Keys.Create("_default", "aes-key-1", KeyType.Oct, 256);
@@ -155,6 +169,22 @@ internal sealed class ConsoleTestHost : IAsyncDisposable
 
     /// <summary>Sends a handful of requests (info, metadata, wrap, unwrap, a 404 and an unauthenticated one) and waits until the inspector has stored them all.</summary>
     public async Task<byte[]> SendSampleTrafficAsync()
+    {
+        try
+        {
+            return await SendSampleTrafficCoreAsync();
+        }
+        catch (HttpRequestException ex)
+        {
+            // Open question 47: say what the server decided about the handshake, so the rare "chain not trusted" failure is diagnosable when it happens.
+            var failures = string.Join(" | ", Inspector.ConnectionEvents(limit: 20)
+                .Where(static e => e.Kind == "handshake_failed")
+                .Select(static e => $"{e.FailureReason}: {e.FailureDescription} / {e.FailureDetail}"));
+            throw new InvalidOperationException($"Sample traffic failed: {ex.Message}. Server-side handshake failures: {(failures.Length == 0 ? "(none recorded)" : failures)}", ex);
+        }
+    }
+
+    private async Task<byte[]> SendSampleTrafficCoreAsync()
     {
         var (ekm, _, owner) = CreateTrustedEkmClient();
         using (owner)

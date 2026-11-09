@@ -1,0 +1,454 @@
+@page "/faults"
+@using EkmMock.Server.Faults
+@implements IDisposable
+@inject FaultAdminService Faults
+@inject IFaultStatus Status
+@inject IConsoleUser CurrentUser
+@inject IToastService Toasts
+
+<PageTitle>Fault injection - EkmMock console</PageTitle>
+
+<h1 tabindex="-1">Fault injection</h1>
+<p class="page-intro">Break the HSM on purpose to see how Managed HSM reacts: slow answers, errors, an offline engine, requests that never get an answer. Rules apply to EKM requests only. The console, <code>/healthz</code>, <code>/readyz</code> and <code>/metrics</code> are never affected. Rules live in memory and are gone after a restart.</p>
+
+@if (!_list.Enabled)
+{
+    <ConsoleAlert Intent="AlertIntent.Info" Title="Fault injection is disabled" DataRole="faults-disabled">
+        This page is read-only. Start the process with the environment variable <code>EKMMOCK_ENABLE_FAULTS=true</code> to create fault rules. Until then no rule can exist and no request is affected.
+    </ConsoleAlert>
+}
+else
+{
+    <ConsoleAlert Intent="@(_list.ActiveRules > 0 ? AlertIntent.Warning : AlertIntent.Info)" Title="@(_list.ActiveRules > 0 ? "Faults are active" : "Fault injection is enabled")" DataRole="faults-state">
+        @if (_list.ActiveRules > 0)
+        {
+            <span data-role="faults-active-count">@_list.ActiveRules active rule@(_list.ActiveRules == 1 ? string.Empty : "s").</span>
+        }
+        else
+        {
+            <span>No rule is active: traffic is not affected.</span>
+        }
+        @if (_list.HsmOffline)
+        {
+            <strong data-role="faults-offline-note"> The HSM is simulated as offline.</strong>
+        }
+    </ConsoleAlert>
+}
+
+<div role="status" aria-live="polite" data-role="messages">
+    @if (_message is { } message)
+    {
+        <ConsoleAlert Intent="message.Intent" DataRole="action-result" OnDismiss="DismissMessage">@message.Text</ConsoleAlert>
+    }
+</div>
+
+@if (_list.Enabled)
+{
+    <section class="dashboard-card" aria-labelledby="presets-title" data-role="presets">
+        <h2 id="presets-title" class="card-title">Presets</h2>
+        <div class="toolbar" role="group" aria-label="Fault presets">
+            @foreach (var preset in _list.Presets)
+            {
+                <FluentButton Appearance="Appearance.Neutral" OnClick="() => ApplyPresetAsync(preset)" title="@preset.Description" data-role="preset" data-preset="@preset.Id">@preset.Title</FluentButton>
+            }
+            <FluentButton Appearance="Appearance.Neutral" Class="danger-text" Disabled="@(_list.Rules.Count == 0)" OnClick="ClearAsync" data-role="clear-all">Clear all rules</FluentButton>
+        </div>
+    </section>
+
+    <section class="dashboard-card form-card" aria-labelledby="rule-form-title" data-role="rule-form">
+        <h2 id="rule-form-title" class="card-title">@(_editingId is null ? "Add a rule" : $"Edit rule {_editingId}")</h2>
+        <div class="form-grid">
+            <div class="filter-field">
+                <FluentSelect TOption="KindOption" Label="Kind" Items="@KindOption.All" @bind-SelectedOption="_kind" OptionText="@(k => k.Title)" OptionValue="@(k => k.Wire)" data-role="rule-kind" />
+                <span class="field-help" data-role="kind-help">@_kind.Help</span>
+            </div>
+            <div class="filter-field">
+                <FluentSelect TOption="string" Label="Namespace" Items="@NamespaceChoices" @bind-SelectedOption="_namespace" OptionText="@(n => n.Length == 0 ? "All namespaces" : n)" OptionValue="@(n => n)" Disabled="@(!ScopeApplies)" data-role="rule-namespace" />
+            </div>
+            <div class="filter-field">
+                <FluentTextField @bind-Value="_key" Immediate="true" ImmediateDelay="0" Label="Key (optional)" Placeholder="any key" Maxlength="64" AutoComplete="off" Disabled="@(!ScopeApplies)" data-role="rule-key" aria-describedby="rule-key-help" />
+                <span id="rule-key-help" class="field-help">Leave empty for every key. info has no key.</span>
+            </div>
+            <div class="filter-field">
+                <FluentSelect TOption="string" Label="Operation" Items="@OperationChoices" @bind-SelectedOption="_op" OptionText="@(o => o.Length == 0 ? "All operations" : o)" OptionValue="@(o => o)" Disabled="@(!ScopeApplies)" data-role="rule-op" />
+            </div>
+
+            @if (_kind.Wire == FaultKinds.Delay)
+            {
+                <div class="filter-field">
+                    <FluentSelect TOption="string" Label="Delay" Items="@DelayModes" @bind-SelectedOption="_delayMode" OptionText="@(m => m)" OptionValue="@(m => m)" data-role="rule-delay-mode" />
+                </div>
+                @if (_delayMode == DelayModes[0])
+                {
+                    <div class="filter-field">
+                        <FluentTextField @bind-Value="_delayMs" Immediate="true" ImmediateDelay="0" Label="Delay (ms)" Placeholder="100" AutoComplete="off" data-role="rule-delay-ms" />
+                    </div>
+                }
+                else
+                {
+                    <div class="filter-field">
+                        <FluentTextField @bind-Value="_minMs" Immediate="true" ImmediateDelay="0" Label="Minimum (ms)" Placeholder="50" AutoComplete="off" data-role="rule-min-ms" />
+                    </div>
+                    <div class="filter-field">
+                        <FluentTextField @bind-Value="_maxMs" Immediate="true" ImmediateDelay="0" Label="Maximum (ms)" Placeholder="150" AutoComplete="off" data-role="rule-max-ms" />
+                    </div>
+                }
+            }
+            else if (_kind.Wire == FaultKinds.Error)
+            {
+                <div class="filter-field">
+                    <FluentTextField @bind-Value="_percent" Immediate="true" ImmediateDelay="0" Label="Share of requests (%)" Placeholder="50" AutoComplete="off" data-role="rule-percent" />
+                </div>
+                <div class="filter-field">
+                    <FluentSelect TOption="int" Label="Status" Items="@FaultAdminService.ErrorStatuses" @bind-SelectedOption="_status" OptionText="@(s => StatusText(s))" OptionValue="@(s => s.ToString(CultureInfo.InvariantCulture))" data-role="rule-status" />
+                </div>
+            }
+
+            <div class="filter-field">
+                <FluentTextField @bind-Value="_expiresMinutes" Immediate="true" ImmediateDelay="0" Label="Expires after (minutes, optional)" Placeholder="no expiry" AutoComplete="off" data-role="rule-expires" aria-describedby="rule-expires-help" />
+                <span id="rule-expires-help" class="field-help">The rule switches itself off after this time. Leave empty to keep it until you remove it.</span>
+            </div>
+            <div class="filter-field wide">
+                <FluentTextField @bind-Value="_description" Immediate="true" ImmediateDelay="0" Label="Description (optional)" Maxlength="@FaultAdminService.MaxDescriptionLength" AutoComplete="off" data-role="rule-description" />
+            </div>
+        </div>
+        <span class="field-help @(FormProblem is null ? null : "field-invalid")" role="@(FormProblem is null ? null : "alert")" data-role="rule-problem">@(FormProblem ?? "Ready to save.")</span>
+        <div class="inline-form">
+            <FluentButton Appearance="Appearance.Accent" Disabled="@(FormProblem is not null)" OnClick="SaveAsync" data-role="rule-save">@(_editingId is null ? "Add rule" : "Save changes")</FluentButton>
+            @if (_editingId is not null)
+            {
+                <FluentButton Appearance="Appearance.Neutral" OnClick="CancelEdit" data-role="rule-cancel">Cancel</FluentButton>
+            }
+        </div>
+    </section>
+}
+
+<section class="dashboard-card" aria-labelledby="rules-title" data-role="rules">
+    <h2 id="rules-title" class="card-title">Rules <span class="count-note" data-role="rule-count">(@_list.Rules.Count)</span></h2>
+    @if (_list.Rules.Count == 0)
+    {
+        <p class="chart-empty" data-role="rules-empty">@(_list.Enabled ? "No fault rules. Add one above or pick a preset." : "No fault rules. Fault injection is disabled.")</p>
+    }
+    else
+    {
+        <div class="grid-scroll"><FluentDataGrid Items="@_list.Rules.AsQueryable()" TGridItem="FaultRuleView" ResizableColumns="false" GridTemplateColumns="3.5rem 6.5rem 6.5rem 11rem 10rem 4rem 6.5rem minmax(6rem, 1fr) 17rem" aria-label="Fault rules">
+            <TemplateColumn Title="Rule"><code data-role="rule-id">@context.Id</code></TemplateColumn>
+            <TemplateColumn Title="State">
+                <span class="key-state state-@(context.State == FaultStates.Active ? "enabled" : context.State == FaultStates.Expired ? "expired" : "disabled")" data-role="rule-state" data-state="@context.State">
+                    <span class="state-icon" aria-hidden="true">@(context.State == FaultStates.Active ? "●" : context.State == FaultStates.Expired ? "◔" : "○")</span> @context.State
+                </span>
+            </TemplateColumn>
+            <TemplateColumn Title="Kind"><span data-role="rule-kind-text">@KindTitle(context.Kind)</span></TemplateColumn>
+            <TemplateColumn Title="Applies to"><span data-role="rule-scope">@context.Scope</span></TemplateColumn>
+            <TemplateColumn Title="Parameters"><span data-role="rule-params">@(context.Parameters.Length == 0 ? "-" : context.Parameters)</span></TemplateColumn>
+            <TemplateColumn Title="Fired"><span data-role="rule-fired">@context.Fired</span></TemplateColumn>
+            <TemplateColumn Title="Expires"><span data-role="rule-expires-at">@(context.ExpiresAt is { } at ? at.UtcDateTime.ToString("HH:mm:ss", CultureInfo.InvariantCulture) + " UTC" : "never")</span></TemplateColumn>
+            <TemplateColumn Title="Description"><span class="wrap-anywhere" data-role="rule-description-text">@context.Description</span></TemplateColumn>
+            <TemplateColumn Title="Actions">
+                @if (_list.Enabled)
+                {
+                    <FluentButton Appearance="Appearance.Lightweight" OnClick="() => ToggleAsync(context)" aria-label="@(context.Enabled ? $"Disable rule {context.Id}" : $"Enable rule {context.Id}")" data-role="rule-toggle">@(context.Enabled ? "Disable" : "Enable")</FluentButton>
+                    <FluentButton Appearance="Appearance.Lightweight" OnClick="() => Edit(context)" aria-label="@($"Edit rule {context.Id}")" data-role="rule-edit">Edit</FluentButton>
+                    <FluentButton Appearance="Appearance.Lightweight" Class="danger-text" OnClick="() => DeleteAsync(context)" aria-label="@($"Delete rule {context.Id}")" data-role="rule-delete">Delete</FluentButton>
+                }
+            </TemplateColumn>
+        </FluentDataGrid></div>
+    }
+    <div class="inline-form">
+        <FluentButton Appearance="Appearance.Lightweight" OnClick="Reload" data-role="refresh">Refresh</FluentButton>
+    </div>
+</section>
+
+<section class="dashboard-card" aria-labelledby="how-title" data-role="how-it-works">
+    <h2 id="how-title" class="card-title">How rules are applied</h2>
+    <ul>
+        <li><strong>One rule acts on a request.</strong> An HSM-offline rule wins over everything. Otherwise the matching rules are tried most specific first (key, then operation, then namespace, then global), oldest first. An error-rate rule whose dice say "not this time" lets the next rule have its turn.</li>
+        <li><strong>Delay</strong> waits before the crypto call without blocking a thread. The request still succeeds, and when it ends after the 200 ms internal deadline it is counted in <code>ekmmock_budget_exceeded_total</code>. It shows as the "delay" segment of the Timing waterfall.</li>
+        <li><strong>Blackhole</strong> holds a concurrency slot until the client gives up, so enough of them make the next request answer 429. <strong>Close connection</strong> and a blackhole that is given up show as status 499, "no response".</li>
+        <li><strong>Key disabled</strong> answers wrap and unwrap with 403 KeyDisabled, metadata still works, and the key store is not touched.</li>
+    </ul>
+</section>
+
+@code {
+    private sealed record Message(AlertIntent Intent, string Text);
+
+    private sealed record KindOption(string Wire, string Title, string Help)
+    {
+        public static readonly IReadOnlyList<KindOption> All =
+        [
+            new(FaultKinds.Delay, "Delay", "Waits before the crypto call. Simulates a distant network HSM."),
+            new(FaultKinds.Error, "Error rate", "Answers a share of the requests with 429, 500 or 503."),
+            new(FaultKinds.Offline, "HSM offline", "info and every operation answer 503 HsmUnavailable. Applies to everything."),
+            new(FaultKinds.KeyDisabled, "Key disabled (temporary)", "Wrap and unwrap answer 403 KeyDisabled without changing the key. Metadata still works."),
+            new(FaultKinds.Blackhole, "Blackhole", "Accepts the request and never answers, until the client gives up."),
+            new(FaultKinds.Close, "Close connection", "Aborts the connection without a response."),
+        ];
+    }
+
+    private static readonly string[] DelayModes = ["Fixed", "Uniform range"];
+    private static readonly string[] OperationChoices = ["", .. FaultAdminService.Operations];
+
+    private FaultList _list = new(false, false, 0, 0, [], []);
+    private Message? _message;
+    private string? _editingId;
+    private KindOption _kind = KindOption.All[0];
+    private string _namespace = string.Empty;
+    private string? _key = string.Empty;
+    private string _op = string.Empty;
+    private string _delayMode = DelayModes[0];
+    private string? _delayMs = "100";
+    private string? _minMs = "50";
+    private string? _maxMs = "150";
+    private string? _percent = "50";
+    private int _status = 503;
+    private string? _expiresMinutes = string.Empty;
+    private string? _description = string.Empty;
+
+    private IReadOnlyList<string> NamespaceChoices => ["", .. Faults.NamespaceNames()];
+
+    private bool ScopeApplies => _kind.Wire != FaultKinds.Offline;
+
+    protected override void OnInitialized()
+    {
+        Status.Changed += OnStatusChanged;
+        Load();
+    }
+
+    public void Dispose() => Status.Changed -= OnStatusChanged;
+
+    // The banner and this page both follow the rule store: a rule that expires, or a change made from another console or the REST API, shows up without a refresh.
+    private void OnStatusChanged() => _ = InvokeAsync(() =>
+    {
+        Load();
+        StateHasChanged();
+    });
+
+    private void Load() => _list = Faults.List();
+
+    private void Reload() => Load();
+
+    private void DismissMessage() => _message = null;
+
+    private static string StatusText(int status) => status switch
+    {
+        429 => "429 TooManyRequests",
+        500 => "500 InternalError",
+        _ => "503 HsmUnavailable",
+    };
+
+    private static string KindTitle(string wire) => KindOption.All.FirstOrDefault(k => k.Wire == wire)?.Title ?? wire;
+
+    // ---- form ----
+
+    private FaultRuleRequest? _request;
+
+    /// <summary>The first thing wrong with the form, or null. Uses the same validation as the REST API, after parsing the numbers.</summary>
+    private string? FormProblem
+    {
+        get
+        {
+            _request = null;
+            if (!TryBuild(out var request, out var problem))
+            {
+                return problem;
+            }
+
+            try
+            {
+                FaultAdminService.Validate(request);
+            }
+            catch (ConsoleActionException exception)
+            {
+                return exception.Message;
+            }
+
+            _request = request;
+            return null;
+        }
+    }
+
+    private bool TryBuild(out FaultRuleRequest request, out string? problem)
+    {
+        request = new FaultRuleRequest(_kind.Wire);
+        problem = null;
+        int? delay = null, min = null, max = null, expires = null;
+        double? percent = null;
+        if (_kind.Wire == FaultKinds.Delay)
+        {
+            if (_delayMode == DelayModes[0])
+            {
+                if (!TryInt(_delayMs, out delay) || delay is null)
+                {
+                    problem = "Enter the delay as a whole number of milliseconds.";
+                    return false;
+                }
+            }
+            else if (!TryInt(_minMs, out min) || !TryInt(_maxMs, out max) || min is null || max is null)
+            {
+                problem = "Enter the minimum and the maximum as whole numbers of milliseconds.";
+                return false;
+            }
+        }
+
+        if (_kind.Wire == FaultKinds.Error)
+        {
+            if (!double.TryParse(_percent?.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed))
+            {
+                problem = "Enter the share of requests as a number from 0 to 100.";
+                return false;
+            }
+
+            percent = parsed;
+        }
+
+        if (!string.IsNullOrWhiteSpace(_expiresMinutes))
+        {
+            if (!int.TryParse(_expiresMinutes.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var minutes) || minutes is < 1 or > FaultAdminService.MaxExpirySeconds / 60)
+            {
+                problem = $"Expiry must be a whole number of minutes from 1 to {(FaultAdminService.MaxExpirySeconds / 60).ToString(CultureInfo.InvariantCulture)}.";
+                return false;
+            }
+
+            expires = minutes * 60;
+        }
+
+        request = new FaultRuleRequest(
+            _kind.Wire,
+            _namespace,
+            _key,
+            _op,
+            delay,
+            min,
+            max,
+            percent,
+            _kind.Wire == FaultKinds.Error ? _status : null,
+            _description,
+            expires);
+        return true;
+    }
+
+    private static bool TryInt(string? text, out int? value)
+    {
+        value = null;
+        if (!int.TryParse(text?.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var parsed))
+        {
+            return false;
+        }
+
+        value = parsed;
+        return true;
+    }
+
+    private void ResetForm()
+    {
+        _editingId = null;
+        _kind = KindOption.All[0];
+        _namespace = string.Empty;
+        _key = string.Empty;
+        _op = string.Empty;
+        _delayMode = DelayModes[0];
+        _delayMs = "100";
+        _minMs = "50";
+        _maxMs = "150";
+        _percent = "50";
+        _status = 503;
+        _expiresMinutes = string.Empty;
+        _description = string.Empty;
+    }
+
+    // ---- actions ----
+
+    private async Task<string> ActorAsync() => (await CurrentUser.GetAsync()).AuditName;
+
+    private async Task RunAsync(Func<string, Task> action, string success)
+    {
+        _message = null;
+        try
+        {
+            await action(await ActorAsync());
+            _message = new Message(AlertIntent.Success, success);
+            Toasts.ShowSuccess(success);
+        }
+        catch (ConsoleActionException exception)
+        {
+            _message = new Message(AlertIntent.Error, exception.Message);
+            Toasts.ShowError(exception.Message);
+        }
+
+        Load();
+    }
+
+    private async Task SaveAsync()
+    {
+        if (FormProblem is not null || _request is not { } request)
+        {
+            return;
+        }
+
+        var editing = _editingId;
+        await RunAsync(actor =>
+        {
+            var view = editing is null ? Faults.Create(actor, request) : Faults.Update(actor, editing, request);
+            _ = view;
+            return Task.CompletedTask;
+        }, editing is null ? "Fault rule added." : $"Fault rule {editing} saved.");
+        if (_message is { Intent: AlertIntent.Success })
+        {
+            ResetForm();
+        }
+    }
+
+    private Task ApplyPresetAsync(FaultPresetView preset)
+        => RunAsync(actor =>
+        {
+            Faults.ApplyPreset(actor, preset.Id);
+            return Task.CompletedTask;
+        }, $"Preset \"{preset.Title}\" applied.");
+
+    private Task ToggleAsync(FaultRuleView rule)
+        => RunAsync(actor =>
+        {
+            Faults.SetEnabled(actor, rule.Id, !rule.Enabled);
+            return Task.CompletedTask;
+        }, $"Rule {rule.Id} {(rule.Enabled ? "disabled" : "enabled")}.");
+
+    private Task DeleteAsync(FaultRuleView rule)
+        => RunAsync(actor =>
+        {
+            Faults.Delete(actor, rule.Id);
+            if (_editingId == rule.Id)
+            {
+                ResetForm();
+            }
+
+            return Task.CompletedTask;
+        }, $"Rule {rule.Id} deleted.");
+
+    private Task ClearAsync()
+        => RunAsync(actor =>
+        {
+            var removed = Faults.Clear(actor);
+            ResetForm();
+            _ = removed;
+            return Task.CompletedTask;
+        }, "All fault rules removed.");
+
+    private void CancelEdit() => ResetForm();
+
+    private void Edit(FaultRuleView rule)
+    {
+        _editingId = rule.Id;
+        _kind = KindOption.All.First(k => k.Wire == rule.Kind);
+        _namespace = rule.Namespace ?? string.Empty;
+        _key = rule.Key ?? string.Empty;
+        _op = rule.Op ?? string.Empty;
+        _delayMode = rule.DelayMs is null && rule.MinMs is not null ? DelayModes[1] : DelayModes[0];
+        _delayMs = rule.DelayMs?.ToString(CultureInfo.InvariantCulture) ?? "100";
+        _minMs = rule.MinMs?.ToString(CultureInfo.InvariantCulture) ?? "50";
+        _maxMs = rule.MaxMs?.ToString(CultureInfo.InvariantCulture) ?? "150";
+        _percent = rule.ErrorPercent?.ToString("0.##", CultureInfo.InvariantCulture) ?? "50";
+        _status = rule.StatusCode ?? 503;
+        _expiresMinutes = string.Empty; // the clock restarts when a time is entered; empty keeps no expiry
+        _description = rule.Description ?? string.Empty;
+    }
+}

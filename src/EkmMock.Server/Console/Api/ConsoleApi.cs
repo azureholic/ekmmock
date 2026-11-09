@@ -1,7 +1,10 @@
 using System.Text.Json.Serialization;
+using EkmMock.Server.Ekm;
 using EkmMock.Server.Inspector;
+using EkmMock.Server.Metrics;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.Extensions.Options;
 
 namespace EkmMock.Server.WebConsole;
 
@@ -93,6 +96,19 @@ internal static class ConsoleApi
         }).AllowAnonymous();
 
         var api = endpoints.MapGroup(BasePath).RequireAuthorization(ConsoleAuth.PolicyName);
+
+        // Prometheus scrape endpoint (spec 9, console port only). Follows the console authentication unless Metrics:AllowAnonymous is set.
+        var metricsEndpoint = endpoints.MapGet("/metrics", (EkmMetrics metrics, ConcurrencyGate gate) => Results.Text(
+            PrometheusExposition.Render(metrics, gate.InFlight),
+            PrometheusExposition.ContentType));
+        if (endpoints.ServiceProvider.GetRequiredService<IOptions<MetricsOptions>>().Value.AllowAnonymous)
+        {
+            metricsEndpoint.AllowAnonymous();
+        }
+        else
+        {
+            metricsEndpoint.RequireAuthorization(ConsoleAuth.PolicyName);
+        }
 
         api.MapGet("/status", (IConsoleStatusProvider status) => Results.Json(status.Get(), ConsoleApiJsonContext.Default.ConsoleStatus));
 

@@ -3,6 +3,7 @@ using System.Diagnostics.Metrics;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
 using EkmMock.Server.Connections;
+using EkmMock.Server.Metrics;
 using EkmMock.Server.Tls;
 using Microsoft.Extensions.Logging.Abstractions;
 

@@ -96,19 +96,42 @@ internal sealed class InspectorOptionsValidator : IValidateOptions<InspectorOpti
         => options.IsValid(out var error) ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(error);
 
     public ValidateOptionsResult Validate(string? name, LimitsOptions options)
-        => options.IsValid() ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail("Limits:LatencyBudgetMs must not be smaller than Limits:LatencyWarningMs, and neither may be negative");
+    {
+        if (!options.IsValid())
+        {
+            return ValidateOptionsResult.Fail("Limits:LatencyBudgetMs must not be smaller than Limits:LatencyWarningMs, and neither may be negative");
+        }
+
+        if (options.InternalDeadlineMs < 1)
+        {
+            return ValidateOptionsResult.Fail("Limits:InternalDeadlineMs must be at least 1");
+        }
+
+        return options.MaxConcurrency < 1
+            ? ValidateOptionsResult.Fail("Limits:MaxConcurrency must be at least 1")
+            : ValidateOptionsResult.Success;
+    }
 }
 
-/// <summary>The latency budget (spec 10.1, 8.1). Only the thresholds exist now; the deadline and concurrency limits arrive with M7.</summary>
+/// <summary>The latency budget and the limits of the EKM endpoint (spec 10.1, 8.1).</summary>
 internal sealed class LimitsOptions
 {
     public const string SectionName = "Limits";
 
-    /// <summary>Managed HSM's per-request timeout: above this a request is red (spec 8.1, 10.1).</summary>
+    /// <summary>Managed HSM's per-request timeout: above this a request is red (spec 8.1, 10.1) and logged as an error (spec 9).</summary>
     public int LatencyBudgetMs { get; set; } = 250;
 
-    /// <summary>From here on a request is amber (spec 8.1: green below 150 ms).</summary>
+    /// <summary>From here on a request is amber (spec 8.1: green below 150 ms) and, strictly above it, logged as a warning (spec 9).</summary>
     public int LatencyWarningMs { get; set; } = 150;
+
+    /// <summary>
+    /// The internal deadline (spec 10.1), measured from the start of the request: when it has passed before the crypto call starts the answer is an immediate
+    /// <c>429</c>; a crypto call that ends after it still returns its result and is counted in <c>ekmmock_budget_exceeded_total</c>. Default 200 ms, 50 ms under the budget.
+    /// </summary>
+    public int InternalDeadlineMs { get; set; } = 200;
+
+    /// <summary>Requests in flight at the same time (spec 10.1); one more is answered <c>429</c> immediately. There is no queue. Default 64.</summary>
+    public int MaxConcurrency { get; set; } = 64;
 
     public bool IsValid() => LatencyWarningMs >= 0 && LatencyBudgetMs >= LatencyWarningMs;
 }

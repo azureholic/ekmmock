@@ -8,6 +8,7 @@ using EkmMock.Crypto;
 using EkmMock.Pki;
 using EkmMock.Server.Connections;
 using EkmMock.Server.Hosting;
+using EkmMock.Server.Metrics;
 using EkmMock.Server.Tls;
 using EkmMock.TestSupport;
 using Microsoft.AspNetCore.Builder;
@@ -51,6 +52,9 @@ internal sealed class RealEkmHostOptions
     public Action<IServiceCollection>? ConfigureServices { get; init; }
 
     public Dictionary<string, string?> Configuration { get; init; } = [];
+
+    /// <summary>The minimum log level captured; null means Information (or Debug when <c>EKMMOCK_TEST_DEBUG=1</c>). The log redaction test captures down to Trace.</summary>
+    public LogLevel? MinLogLevel { get; init; }
 }
 
 /// <summary>
@@ -119,8 +123,11 @@ internal sealed class RealEkmHost : IAsyncDisposable
         var keyFile = string.Empty;
         if (!options.DevMode)
         {
-            var server = options.ServerCertificate ?? options.Pki.IssueServer();
+            // The host reads the PEM files; the certificate object (and its key container on Windows) is only needed to write them, so dispose it when this method created it.
+            var created = options.ServerCertificate is null ? options.Pki.IssueServer() : null;
+            var server = options.ServerCertificate ?? created!;
             (certFile, keyFile) = server.WriteFiles(Path.Combine(folder.Path, "tls"));
+            created?.Dispose();
         }
         var logs = new CapturingLoggerProvider();
         var dataPath = Path.Combine(folder.Path, "data");
@@ -163,7 +170,7 @@ internal sealed class RealEkmHost : IAsyncDisposable
             builder.Configuration.AddInMemoryCollection(configuration);
             builder.Logging.ClearProviders();
             builder.Logging.AddProvider(logs);
-            builder.Logging.SetMinimumLevel(Environment.GetEnvironmentVariable("EKMMOCK_TEST_DEBUG") == "1" ? LogLevel.Debug : LogLevel.Information);
+            builder.Logging.SetMinimumLevel(options.MinLogLevel ?? (Environment.GetEnvironmentVariable("EKMMOCK_TEST_DEBUG") == "1" ? LogLevel.Debug : LogLevel.Information));
             builder.Services.AddSingleton<IMasterKeyProvider>(masterKey);
             builder.Services.AddSingleton(new SoftwareCryptoBackendOptions
             {

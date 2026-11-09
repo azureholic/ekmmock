@@ -26,7 +26,8 @@ internal static class ConsoleServiceCollectionExtensions
         services.TryAddSingleton<ConsoleCertificates>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IConfigureOptions<KestrelServerOptions>, ConsoleKestrelSetup>());
 
-        services.TryAddSingleton<IFaultStatus, NoFaultStatus>();
+        services.TryAddSingleton<IFaultStatus, FaultStatus>();
+        services.TryAddSingleton<FaultAdminService>();
         services.TryAddSingleton<IConsoleStatusProvider, ConsoleStatusProvider>();
 
         // M6: the console actions. One set of services shared by the Blazor pages and /api/console/*, so both write the same audit entries.

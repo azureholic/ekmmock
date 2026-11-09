@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Security;
 using System.Security.Cryptography.X509Certificates;
 using EkmMock.Server.Connections;
+using EkmMock.Server.Metrics;
 using EkmMock.Server.Tls;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.AspNetCore.Server.Kestrel.Https;

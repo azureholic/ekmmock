@@ -266,6 +266,8 @@ internal sealed class AboutService : IAboutService
         Add("Inspector", "RetainDays", inspector.RetainDays);
         Add("Limits", "LatencyBudgetMs", _limits.Value.LatencyBudgetMs);
         Add("Limits", "LatencyWarningMs", _limits.Value.LatencyWarningMs);
+        Add("Limits", "InternalDeadlineMs", _limits.Value.InternalDeadlineMs);
+        Add("Limits", "MaxConcurrency", _limits.Value.MaxConcurrency);
 
         Add("Environment flags", "EKMMOCK_ALLOW_KEY_IMPORT", _engine.AllowKeyImport);
         Add("Environment flags", InspectorOptions.AllowRevealVariable, _inspector.Status().RevealAllowed || EnvironmentRevealGate.IsEnvironmentFlagSet());

@@ -65,6 +65,12 @@ internal sealed class EkmFactoryOptions
     public Action<IServiceCollection>? ConfigureServices { get; init; }
 
     public bool CaptureLogs { get; init; } = true;
+
+    /// <summary>Switches fault injection on (the test equivalent of <c>EKMMOCK_ENABLE_FAULTS=true</c>). Off by default, whatever the environment of the test process says.</summary>
+    public bool EnableFaults { get; init; }
+
+    /// <summary>The dice of fault rules; null keeps the system random source.</summary>
+    public EkmMock.Server.Faults.IFaultRandom? FaultRandom { get; init; }
 }
 
 /// <summary>The EKM server in the in-process test host: plain HTTP, no Kestrel, no TLS (M2).</summary>
@@ -95,6 +101,12 @@ internal sealed class EkmFactory : WebApplicationFactory<Program>
     public SoftwareCryptoBackend Backend => Services.GetRequiredService<SoftwareCryptoBackend>();
 
     public IKeyManager Keys => Services.GetRequiredService<IKeyManager>();
+
+    public EkmMock.Server.Faults.FaultRuleStore Faults => Services.GetRequiredService<EkmMock.Server.Faults.FaultRuleStore>();
+
+    public EkmMock.Server.Metrics.EkmMetrics Metrics => Services.GetRequiredService<EkmMock.Server.Metrics.EkmMetrics>();
+
+    public ConcurrencyGate Gate => Services.GetRequiredService<ConcurrencyGate>();
 
     public NamespaceStore Namespaces => Services.GetRequiredService<NamespaceStore>();
 
@@ -143,6 +155,11 @@ internal sealed class EkmFactory : WebApplicationFactory<Program>
             // runs the mTLS authorizer, and EKM routes answer only on the EKM listener ports.
             services.AddSingleton<IEkmCallerAuthorizer, AllowAllCallerAuthorizer>();
             services.AddSingleton<IEkmPortPolicy, AnyPortPolicy>();
+            services.AddSingleton<EkmMock.Server.Faults.IFaultGate>(new FixedFaultGate(_options.EnableFaults));
+            if (_options.FaultRandom is { } random)
+            {
+                services.AddSingleton(random);
+            }
 
             _options.ConfigureServices?.Invoke(services);
         });
@@ -158,11 +175,80 @@ internal sealed class EkmFactory : WebApplicationFactory<Program>
     }
 }
 
+/// <summary>A request body that arrives slowly: the first bytes at once, the rest after <c>delay</c> (a client that is "still sending"). Only meaningful against a real listener: the in-process test host buffers the body first.</summary>
+internal sealed class SlowBody : HttpContent
+{
+    private readonly string _json;
+    private readonly TimeSpan _delay;
+
+    public SlowBody(string json, TimeSpan delay)
+    {
+        _json = json;
+        _delay = delay;
+        Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+    }
+
+    protected override async Task SerializeToStreamAsync(Stream stream, System.Net.TransportContext? context)
+    {
+        var bytes = Encoding.UTF8.GetBytes(_json);
+        await stream.WriteAsync(bytes.AsMemory(0, 5));
+        await stream.FlushAsync();
+        await Task.Delay(_delay);
+        await stream.WriteAsync(bytes.AsMemory(5));
+    }
+
+    protected override bool TryComputeLength(out long length)
+    {
+        length = -1;
+        return false;
+    }
+}
+
 internal sealed class FixedAvailability : IEngineAvailability
 {
     public FixedAvailability(bool available) => IsAvailable = available;
 
     public bool IsAvailable { get; set; }
+}
+
+/// <summary>Fault injection switched on or off in a test, without touching the environment of the process (the production gate reads <c>EKMMOCK_ENABLE_FAULTS</c>).</summary>
+internal sealed class FixedFaultGate : EkmMock.Server.Faults.IFaultGate
+{
+    public FixedFaultGate(bool enabled) => Enabled = enabled;
+
+    public bool Enabled { get; }
+}
+
+/// <summary>Deterministic dice for fault rules: a scripted sequence of values (cycled), or a seeded <see cref="Random"/>.</summary>
+internal sealed class ScriptedFaultRandom : EkmMock.Server.Faults.IFaultRandom
+{
+    private readonly double[] _doubles;
+    private readonly Random? _seeded;
+    private int _index;
+
+    public ScriptedFaultRandom(params double[] doubles) => _doubles = doubles;
+
+    public ScriptedFaultRandom(int seed)
+    {
+        _doubles = [];
+        _seeded = new Random(seed);
+    }
+
+    public double NextDouble()
+    {
+        lock (this)
+        {
+            return _seeded?.NextDouble() ?? _doubles[_index++ % _doubles.Length];
+        }
+    }
+
+    public int Next(int minInclusive, int maxInclusive)
+    {
+        lock (this)
+        {
+            return _seeded?.Next(minInclusive, maxInclusive + 1) ?? minInclusive + (int)(_doubles[_index++ % _doubles.Length] * (maxInclusive - minInclusive + 1));
+        }
+    }
 }
 
 /// <summary>Test host only: the in-process server has no client certificates, so every caller is "authorized" there.</summary>

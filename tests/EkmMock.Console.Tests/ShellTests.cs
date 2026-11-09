@@ -106,24 +106,20 @@ public sealed class ShellTests : ConsoleTestBase
 
         var links = nav.QuerySelectorAll("a[href]").ToList();
 
-        links.Select(static a => a.GetAttribute("href")).ShouldBe(["/", "/connections", "/dashboard", "/keys", "/namespaces", "/certificates", "/playground", "/audit", "/about"]);
-        links.Select(static a => Text(a)).ShouldBe(["Live traffic", "Connections", "Dashboard", "Keys", "Namespaces & trust", "Certificates", "Playground", "Audit log", "About"]);
+        links.Select(static a => a.GetAttribute("href")).ShouldBe(["/", "/connections", "/dashboard", "/keys", "/namespaces", "/certificates", "/playground", "/faults", "/audit", "/about"]);
+        links.Select(static a => Text(a)).ShouldBe(["Live traffic", "Connections", "Dashboard", "Keys", "Namespaces & trust", "Certificates", "Playground", "Fault injection", "Audit log", "About"]);
         links.ShouldAllBe(static a => a.GetAttribute("tabindex") != "-1", "every enabled link is in the tab order");
-        nav.QuerySelectorAll("[data-nav]").Select(static n => n.GetAttribute("data-nav")).ShouldBe(["live", "connections", "dashboard", "keys", "namespaces", "certificates", "playground", "audit", "about"]);
+        nav.QuerySelectorAll("[data-nav]").Select(static n => n.GetAttribute("data-nav")).ShouldBe(["live", "connections", "dashboard", "keys", "namespaces", "certificates", "playground", "faults", "audit", "about"]);
     }
 
     [Fact]
-    public void ThePlaceholders_AreClearlyLabelled_Disabled_AndHaveNoHref()
+    public void EveryConsolePage_IsARealPage_NoPlaceholderIsLeft()
     {
+        // Since M7 Fault injection is a real page too: the navigation has no "coming in M..." entry any more.
         var cut = Layout();
-        var placeholders = cut.FindAll("[data-nav-placeholder]");
 
-        placeholders.Count.ShouldBe(1);
-        placeholders.Select(static p => p.GetAttribute("data-nav-placeholder")).Distinct().Order().ShouldBe(["M7"]);
-        placeholders.ShouldAllBe(static p => Text(p).Contains("coming in M", StringComparison.Ordinal));
-        placeholders.ShouldAllBe(static p => p.HasAttribute("disabled") || p.GetAttribute("aria-disabled") == "true" || p.QuerySelector("a[href]") == null);
-        // Keys, Namespaces & trust, Certificates, Playground, Audit log and About are real pages since M6; only Fault injection (M7) is still a placeholder.
-        placeholders.Select(static p => Text(p)).ShouldContain(static t => t.StartsWith("Fault injection", StringComparison.Ordinal));
+        cut.FindAll("[data-nav-placeholder]").ShouldBeEmpty();
+        Text(cut.Find("[data-nav='faults']")).ShouldBe("Fault injection");
     }
 
     [Fact]
@@ -134,7 +130,7 @@ public sealed class ShellTests : ConsoleTestBase
         var cut = context.Render<NavMenu>();
 
         cut.FindAll("[data-nav-placeholder]").ShouldBeEmpty();
-        cut.FindAll("[data-nav]").Count.ShouldBe(9);
+        cut.FindAll("[data-nav]").Count.ShouldBe(10);
     }
 
     // ---- theme ----
@@ -211,7 +207,7 @@ public sealed class ShellTests : ConsoleTestBase
 
         cut.Find("[data-role='page-error']").ShouldNotBeNull();
         cut.Markup.ShouldNotContain("boom (test)");
-        cut.Find("nav[aria-label='Console sections']").QuerySelectorAll("a[href]").Count.ShouldBe(9);
+        cut.Find("nav[aria-label='Console sections']").QuerySelectorAll("a[href]").Count.ShouldBe(10);
         cut.Find("header.console-header").ShouldNotBeNull();
 
         InspectorFake.ThrowOnQuery = false;

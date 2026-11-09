@@ -70,8 +70,11 @@ public sealed class BrowserFixture : IAsyncLifetime
     private async Task StartServerAsync()
     {
         _pki = new TestPki();
-        var server = _pki.IssueServer();
-        var (certFile, keyFile) = server.WriteFiles(Path.Combine(_folder.Path, "tls"));
+        string certFile, keyFile;
+        using (var server = _pki.IssueServer())
+        {
+            (certFile, keyFile) = server.WriteFiles(Path.Combine(_folder.Path, "tls"));
+        }
         ConsolePort = FreePort();
         EkmPort = FreePort();
 

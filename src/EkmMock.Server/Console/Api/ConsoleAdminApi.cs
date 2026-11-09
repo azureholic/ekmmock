@@ -24,6 +24,24 @@ internal sealed record UploadCertificateBody(string? CertificatePem, string? Pri
 
 internal sealed record GenerateCertificateBody(string? Fqdn, List<string>? HostNames);
 
+/// <summary>The body of a fault rule create or update (snake_case on the wire: <c>delay_ms</c>, <c>error_percent</c>, <c>expires_after_seconds</c>, ...).</summary>
+internal sealed record FaultRuleBody(
+    string? Kind,
+    string? Namespace,
+    string? Key,
+    string? Op,
+    int? DelayMs,
+    int? MinMs,
+    int? MaxMs,
+    double? ErrorPercent,
+    int? StatusCode,
+    string? Description,
+    int? ExpiresAfterSeconds,
+    bool? Enabled)
+{
+    public FaultRuleRequest ToRequest() => new(Kind, Namespace, Key, Op, DelayMs, MinMs, MaxMs, ErrorPercent, StatusCode, Description, ExpiresAfterSeconds, Enabled);
+}
+
 // ---- responses ----
 internal sealed record KeyList(IReadOnlyList<KeyView> Keys);
 
@@ -45,6 +63,10 @@ internal sealed record NamespaceDeleted(bool Deleted, int DestroyedKeys);
 [JsonSerializable(typeof(TrustImportBody))]
 [JsonSerializable(typeof(UploadCertificateBody))]
 [JsonSerializable(typeof(GenerateCertificateBody))]
+[JsonSerializable(typeof(FaultRuleBody))]
+[JsonSerializable(typeof(FaultList))]
+[JsonSerializable(typeof(FaultRuleView))]
+[JsonSerializable(typeof(FaultCleared))]
 [JsonSerializable(typeof(KeyList))]
 [JsonSerializable(typeof(KeyView))]
 [JsonSerializable(typeof(KeyDetail))]
@@ -195,6 +217,37 @@ internal static class ConsoleAdminApi
             http.Response.Headers.ContentDisposition = $"attachment; filename=\"{CertificateAdminService.RootCaFileName}\"";
             return Results.Text(pem, "application/x-pem-file");
         });
+
+        // ---- fault injection (spec 10.2) ----
+        api.MapGet("/faults", (FaultAdminService faults) => Run(() => Json(faults.List(), ConsoleAdminJsonContext.Default.FaultList)));
+        api.MapGet("/faults/{id}", (string id, FaultAdminService faults) => Run(() => Json(faults.Get(id), ConsoleAdminJsonContext.Default.FaultRuleView)));
+
+        api.MapPost("/faults", (HttpContext http, FaultAdminService faults, IConsoleUser user) => RunBody(http, ConsoleAdminJsonContext.Default.FaultRuleBody, async body
+            => Results.Json(faults.Create(await Actor(user), body.ToRequest()), ConsoleAdminJsonContext.Default.FaultRuleView, statusCode: StatusCodes.Status201Created)))
+            .AddEndpointFilter<ConsoleMutationFilter>();
+
+        api.MapPut("/faults/{id}", (string id, HttpContext http, FaultAdminService faults, IConsoleUser user) => RunBody(http, ConsoleAdminJsonContext.Default.FaultRuleBody, async body
+            => Json(faults.Update(await Actor(user), id, body.ToRequest()), ConsoleAdminJsonContext.Default.FaultRuleView)))
+            .AddEndpointFilter<ConsoleMutationFilter>();
+
+        api.MapDelete("/faults/{id}", (string id, FaultAdminService faults, IConsoleUser user) => Run(async () =>
+        {
+            faults.Delete(await Actor(user), id);
+            return Results.NoContent();
+        })).AddEndpointFilter<ConsoleMutationFilter>();
+
+        api.MapPost("/faults/{id}/enable", (string id, FaultAdminService faults, IConsoleUser user)
+            => Run(async () => Json(faults.SetEnabled(await Actor(user), id, enabled: true), ConsoleAdminJsonContext.Default.FaultRuleView))).AddEndpointFilter<ConsoleMutationFilter>();
+
+        api.MapPost("/faults/{id}/disable", (string id, FaultAdminService faults, IConsoleUser user)
+            => Run(async () => Json(faults.SetEnabled(await Actor(user), id, enabled: false), ConsoleAdminJsonContext.Default.FaultRuleView))).AddEndpointFilter<ConsoleMutationFilter>();
+
+        api.MapPost("/faults/clear", (FaultAdminService faults, IConsoleUser user)
+            => Run(async () => Json(new FaultCleared(faults.Clear(await Actor(user))), ConsoleAdminJsonContext.Default.FaultCleared))).AddEndpointFilter<ConsoleMutationFilter>();
+
+        api.MapPost("/faults/presets/{presetId}", (string presetId, FaultAdminService faults, IConsoleUser user)
+            => Run(async () => Results.Json(faults.ApplyPreset(await Actor(user), presetId), ConsoleAdminJsonContext.Default.FaultRuleView, statusCode: StatusCodes.Status201Created)))
+            .AddEndpointFilter<ConsoleMutationFilter>();
 
         // ---- audit and about ----
         api.MapGet("/audit", (HttpContext http, IAuditLog audit) => Run(() =>

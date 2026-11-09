@@ -260,6 +260,7 @@ internal sealed class ExchangeRecordFactory
                 Headers = HeadersOf(response.Headers),
                 Body = responseBody,
                 ClientAborted = exchange.ClientAborted,
+                ClosedByServer = exchange.ClosedByFault,
             },
             Timing = new TimingFacts
             {
@@ -271,7 +272,7 @@ internal sealed class ExchangeRecordFactory
                 Budget = LatencyBudget.Classify(exchange.Duration, _limits),
             },
             Key = KeyOf(exchange, status),
-            Faults = exchange.FaultRule is null ? null : new FaultFacts(exchange.FaultRule),
+            Faults = exchange.Fault is { } fault ? Faults.FaultDescriptions.Describe(fault) : null,
         };
 
         var secrets = session.RetainedRequestBody is not null || retainedResponse is not null
@@ -314,7 +315,7 @@ internal sealed class ExchangeRecordFactory
             ThumbprintSha256 = summary?.ThumbprintSha256,
             NotBeforeUtc = summary?.NotBeforeUtc,
             NotAfterUtc = summary?.NotAfterUtc,
-            CommonName = auth?.CommonName,
+            CommonName = auth?.CommonName ?? exchange.PresentedCommonName,
             AuthEvaluated = auth is not null,
             ChainResult = auth?.ChainResult,
             CommonNameAllowed = auth?.CommonNameAllowed,

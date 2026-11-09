@@ -7,6 +7,7 @@ using EkmMock.Crypto;
 using EkmMock.Server.Connections;
 using EkmMock.Server.Hosting;
 using EkmMock.Server.Inspector;
+using EkmMock.Server.Metrics;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace EkmMock.Server.Tests;
@@ -35,9 +36,12 @@ internal static class InspectorHarness
         Action<IServiceCollection>? configure = null,
         bool keys = true,
         bool realRevealGate = false,
-        string? secretDisplay = null)
+        string? secretDisplay = null,
+        Dictionary<string, string?>? configuration = null,
+        bool faults = false,
+        EkmMock.Server.Faults.IFaultRandom? faultRandom = null)
     {
-        var configuration = new Dictionary<string, string?>();
+        configuration ??= [];
         if (persist)
         {
             configuration["Inspector:Persist"] = "true";
@@ -62,6 +66,8 @@ internal static class InspectorHarness
         {
             Configuration = configuration,
             Availability = availability,
+            EnableFaults = faults,
+            FaultRandom = faultRandom,
             ConfigureServices = services =>
             {
                 if (!realRevealGate)
@@ -191,9 +197,38 @@ public sealed class InspectorCaptureTests
         records[9].Request.Body.SizeBytes.ShouldBeGreaterThan(0);
     }
 
-    [Fact(Skip = "429 TooManyRequests is produced by the Limits stage, which arrives with M7 (spec 10.1); the inspector captures it like any other status (see the 400/401/404/405/503 cases) and M7 adds this case.")]
-    public void ATooManyRequestsExchange_IsCaptured_WhenLimitsExist()
+    [Fact]
+    public async Task ATooManyRequestsExchange_IsCaptured_LikeAnyOtherStatus()
     {
+        // Spec 10.1 / 14 test 27: over the concurrency limit the answer is an immediate 429, and the inspector captures it with its body. MaxConcurrency 1 and a blackhole
+        // rule that pins the one slot make it deterministic: the pinned request holds the slot until its client gives up, so the second request cannot get in.
+        using var factory = InspectorHarness.CreateFactory(
+            faults: true,
+            configuration: new Dictionary<string, string?> { ["Limits:MaxConcurrency"] = "1" });
+        var inspector = InspectorHarness.InspectorOf(factory);
+        factory.Faults.Create(new EkmMock.Server.Faults.FaultSpec
+        {
+            Kind = EkmMock.Server.Faults.FaultKind.Blackhole,
+            Scope = new EkmMock.Server.Faults.FaultScope(Key: "aes-key-1"),
+        });
+        var ekm = factory.CreateEkmClient();
+        using var pinned = new CancellationTokenSource();
+        var pin = ekm.Http.PostAsync(EkmClient.Path(null, "aes-key-1", "metadata"), EkmClient.JsonBody(EkmClient.Context), pinned.Token);
+        (await Wait.UntilAsync(() => factory.Gate.InFlight == 1)).ShouldBeTrue();
+
+        var rejected = await ekm.MetadataAsync("rsa-key-1");
+
+        rejected.ShouldBeProxyError(429, "TooManyRequests");
+        var record = (await InspectorHarness.SettleAsync(inspector, 1)).Single();
+        record.Response.Status.ShouldBe(429);
+        record.Response.Code.ShouldBe("TooManyRequests");
+        record.Response.Body.Text.ShouldNotBeNull().ShouldContain("\"code\":\"TooManyRequests\"");
+        record.Request.Operation.ShouldBe("metadata");
+        record.Request.Key.ShouldBe("rsa-key-1");
+        record.Faults.ShouldBeNull(); // the concurrency limit is not a fault
+
+        pinned.Cancel();
+        await Should.ThrowAsync<OperationCanceledException>(() => pin);
     }
 
     [Fact]
@@ -264,7 +299,7 @@ public sealed class InspectorCaptureTests
         wrap.Timing.TotalMs.ShouldBeGreaterThanOrEqualTo(wrap.Timing.CryptoMs);
         wrap.Timing.AuthMs.ShouldBeGreaterThanOrEqualTo(0);
         wrap.Timing.InjectedDelayMs.ShouldBe(0);
-        wrap.Timing.QueueWaitMs.ShouldBe(0);
+        wrap.Timing.QueueWaitMs.ShouldBeInRange(0, 100); // since M7: the time before the crypto stage that is not authorization (a few tenths of a millisecond in process)
         wrap.Timing.Budget.ShouldBe(BudgetStatus.Green);
 
         // Key and faults

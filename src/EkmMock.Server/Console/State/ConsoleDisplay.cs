@@ -38,7 +38,14 @@ internal static class ConsoleDisplay
     };
 
     public static string StatusText(int status, string? code)
-        => string.IsNullOrEmpty(code) ? $"{status.ToString(CultureInfo.InvariantCulture)} {StatusWord(status)}" : $"{status.ToString(CultureInfo.InvariantCulture)} {code}";
+        => status == NoResponseStatus ? "499 No response"
+            : string.IsNullOrEmpty(code) ? $"{status.ToString(CultureInfo.InvariantCulture)} {StatusWord(status)}" : $"{status.ToString(CultureInfo.InvariantCulture)} {code}";
+
+    /// <summary>The status the server records for an exchange that never got an HTTP response (the client gave up on a blackhole or a timeout, or a fault closed the connection).</summary>
+    public const int NoResponseStatus = 499;
+
+    public static string FaultTitle(FaultFacts fault)
+        => $"Fault rule {fault.Rule}" + (string.IsNullOrWhiteSpace(fault.Description) ? string.Empty : ": " + fault.Description);
 
     public static string BudgetCss(BudgetStatus budget) => budget switch
     {

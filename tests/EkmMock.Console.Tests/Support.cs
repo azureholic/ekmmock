@@ -122,13 +122,21 @@ internal sealed class FakeStatus : IConsoleStatusProvider
 
 internal sealed class FakeFaults : IFaultStatus
 {
+    public bool Enabled { get; set; } = true;
+
     public bool Active { get; private set; }
+
+    public int ActiveRules { get; private set; }
+
+    public bool HsmOffline { get; set; }
 
     public event Action? Changed;
 
-    public void Set(bool active)
+    public void Set(bool active, int rules = 1, bool hsmOffline = false)
     {
         Active = active;
+        ActiveRules = active ? rules : 0;
+        HsmOffline = hsmOffline;
         Changed?.Invoke();
     }
 }

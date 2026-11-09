@@ -151,7 +151,7 @@ public sealed class HostCompositionTests
             CounterFlushInterval = TimeSpan.Zero,
         });
         var state = new EkmStartupState();
-        var availability = new DefaultEngineAvailability(backend, state);
+        var availability = new DefaultEngineAvailability(backend, state, new EkmMock.Server.Faults.FaultRuleStore(new FixedFaultGate(false), TimeProvider.System, new EkmMock.Server.Faults.SystemFaultRandom()));
 
         availability.IsAvailable.ShouldBeFalse();
         state.MarkReady(backend.RunSelfTest());

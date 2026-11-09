@@ -9,25 +9,64 @@ namespace EkmMock.Server.WebConsole;
 
 /// <summary>
 /// Whether fault injection is switched on and a fault rule is active (spec 10.2: "a banner at the top of every console page says faults are active").
-/// Fault injection arrives with M7; until then this is always false, but the banner component is wired to it.
+/// <see cref="Active"/> is true while at least one enabled, unexpired rule exists (an HSM-offline rule included); <see cref="Enabled"/> says the process allows faults at all.
 /// </summary>
 internal interface IFaultStatus
 {
+    /// <summary>The process was started with <c>EKMMOCK_ENABLE_FAULTS=true</c>.</summary>
+    bool Enabled { get; }
+
     bool Active { get; }
 
-    /// <summary>Raised when <see cref="Active"/> changes, so the banner of every open console updates (M7 raises it).</summary>
+    /// <summary>How many rules are active (enabled and not expired).</summary>
+    int ActiveRules { get; }
+
+    /// <summary>An "HSM offline" rule is active.</summary>
+    bool HsmOffline { get; }
+
+    /// <summary>Raised when the active state may have changed (a rule was created, changed, removed or expired), so the banner of every open console updates.</summary>
     event Action? Changed;
 }
 
 internal sealed class NoFaultStatus : IFaultStatus
 {
+    public bool Enabled => false;
+
     public bool Active => false;
+
+    public int ActiveRules => 0;
+
+    public bool HsmOffline => false;
 
     public event Action? Changed
     {
         add { }
         remove { }
     }
+}
+
+/// <summary>The real <see cref="IFaultStatus"/>: reads the rule store and forwards its change notifications.</summary>
+internal sealed class FaultStatus : IFaultStatus
+{
+    private readonly Faults.FaultRuleStore _rules;
+
+    public FaultStatus(Faults.FaultRuleStore rules)
+    {
+        _rules = rules;
+        _rules.Changed += OnChanged;
+    }
+
+    public bool Enabled => _rules.Enabled;
+
+    public bool Active => _rules.ActiveCount > 0;
+
+    public int ActiveRules => _rules.ActiveCount;
+
+    public bool HsmOffline => _rules.IsHsmOffline;
+
+    public event Action? Changed;
+
+    private void OnChanged() => Changed?.Invoke();
 }
 
 /// <summary>What the console shell, the banners and <c>/api/console/status</c> need to know. Contains no secret, no path and no key material.</summary>
@@ -42,7 +81,9 @@ internal sealed record ConsoleStatus(
     bool RevealAllowed,
     string SecretDisplay,
     int LatencyBudgetMs,
-    int LatencyWarningMs);
+    int LatencyWarningMs,
+    bool FaultsEnabled = false,
+    bool HsmOfflineFault = false);
 
 /// <summary>The answer of <c>/readyz</c>: ready, or the short names of what is not (never details).</summary>
 internal sealed record ReadinessResult(bool Ready, IReadOnlyList<string> NotReady);
@@ -112,7 +153,9 @@ internal sealed class ConsoleStatusProvider : IConsoleStatusProvider
             inspector.RevealAllowed,
             inspector.SecretDisplay.ToString(),
             _limits.Value.LatencyBudgetMs,
-            _limits.Value.LatencyWarningMs);
+            _limits.Value.LatencyWarningMs,
+            _faults.Enabled,
+            _faults.HsmOffline);
     }
 
     public ReadinessResult CheckReadiness()

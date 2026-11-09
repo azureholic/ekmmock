@@ -53,6 +53,7 @@ a { color: var(--accent-foreground-rest, #0f6cbd); }
 .console-banner fluent-messagebar, .console-banner .fluent-messagebar { max-width: 100%; box-sizing: border-box; }
 .banner-dev { border-left: 6px solid var(--ekm-error); }
 .banner-faults { border-left: 6px solid var(--ekm-warning); }
+.banner-link { margin-left: 0.5rem; }
 
 .console-error { border: 1px solid var(--ekm-error); border-radius: 4px; padding: 0.75rem 1rem; margin: 0.5rem 0; }
 .console-error-retry, .reconnect-button { margin-top: 0.4rem; padding: 0.3rem 0.8rem; cursor: pointer; }
@@ -103,7 +104,7 @@ a { color: var(--accent-foreground-rest, #0f6cbd); }
 .detail-panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem; }
 
 .live-table { border: 1px solid var(--ekm-border); border-radius: 6px; overflow: hidden; min-width: 54rem; }
-.live-header, .live-row { display: grid; grid-template-columns: 6.2rem 6rem 7rem 9rem 7rem 11rem 9.5rem 11rem 9rem minmax(5rem, 1fr); gap: 0.5rem; align-items: center; padding: 0 0.6rem; }
+.live-header, .live-row { display: grid; grid-template-columns: 5.4rem 5.6rem 5.5rem 6.5rem 5.8rem 9.5rem 9rem 7.5rem 6.5rem minmax(9rem, 1fr); gap: 0.5rem; align-items: center; padding: 0 0.6rem; }
 .live-header { background: var(--ekm-card); font-weight: 600; min-height: 2.2rem; border-bottom: 1px solid var(--ekm-border); }
 .live-body { height: 55vh; min-height: 14rem; overflow-y: auto; }
 .live-row { height: 38px; border-bottom: 1px solid var(--ekm-border); cursor: pointer; }

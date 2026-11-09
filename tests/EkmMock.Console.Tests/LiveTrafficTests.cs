@@ -178,7 +178,7 @@ public sealed class LiveTrafficTests : ConsoleTestBase
 
         cut.Find("[data-role='pause-resume']").Click();
 
-        RowIds(cut).ShouldBe([3, 2, 1]);
+        await Wait(cut, () => RowIds(cut).ShouldBe([3, 2, 1]));
         cut.FindAll("[data-role='pending']").ShouldBeEmpty();
         cut.Find("[data-role='state-word']").TextContent.Trim().ShouldBe("Live");
     }

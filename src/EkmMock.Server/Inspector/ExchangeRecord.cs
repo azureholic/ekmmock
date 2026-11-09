@@ -33,7 +33,7 @@ internal sealed record ExchangeRecord
     /// <summary>The key the call touched (type, size, usage after the call); null when no key was involved or found.</summary>
     public KeyFacts? Key { get; init; }
 
-    /// <summary>The fault that fired on this exchange (M7); the field exists now so that the console and the export formats do not change then.</summary>
+    /// <summary>The fault that fired on this exchange (spec 10.2); null when none did.</summary>
     public FaultFacts? Faults { get; init; }
 
     [JsonIgnore]
@@ -142,8 +142,12 @@ internal sealed record ResponseFacts
 
     public required CapturedBody Body { get; init; }
 
-    /// <summary>True when the client went away before the response could be written.</summary>
+    /// <summary>True when the client went away before the response could be written (a client timeout, a blackholed request that the client gave up on).</summary>
     public bool ClientAborted { get; init; }
+
+    /// <summary>True when a fault rule aborted the connection without any response (spec 10.2 "close connection"). The status is then 499, "no response".</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool ClosedByServer { get; init; }
 }
 
 internal sealed record TimingFacts
@@ -155,10 +159,10 @@ internal sealed record TimingFacts
 
     public double CryptoMs { get; init; }
 
-    /// <summary>Delay injected by a fault rule (M7); zero until then.</summary>
+    /// <summary>Delay injected by a fault rule (spec 10.2); zero when none fired.</summary>
     public double InjectedDelayMs { get; init; }
 
-    /// <summary>Time spent waiting for a concurrency slot (M7); zero until then.</summary>
+    /// <summary>Server time before the crypto stage that is neither authorization nor injected delay (reading the request, routing, scheduling); see DECISIONS.md "M7: Limits".</summary>
     public double QueueWaitMs { get; init; }
 
     public required BudgetStatus Budget { get; init; }
@@ -166,7 +170,16 @@ internal sealed record TimingFacts
 
 internal sealed record KeyFacts(string Type, int Size, string State, long WrapCount, long UnwrapCount);
 
-internal sealed record FaultFacts(string Rule);
+/// <summary>
+/// The fault rule that fired on an exchange (spec 8.1 "Faults", spec 10.2): its id, the kind and its parameters in words (for example <c>delay 300 ms</c>, <c>error 503 (50 %)</c>),
+/// and the operator's description. All of it comes from the rule, never from the request.
+/// </summary>
+internal sealed record FaultFacts(string Rule, string? Kind = null, string? Summary = null, string? Description = null)
+{
+    /// <summary>What the badge says: <c>delay 300 ms</c> when the kind is known, otherwise the rule id.</summary>
+    [JsonIgnore]
+    public string Label => Summary ?? Rule;
+}
 
 /// <summary>
 /// A captured body, already redacted. <see cref="Text"/> is the raw text with every secret replaced by its masked form

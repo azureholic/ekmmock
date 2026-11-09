@@ -155,10 +155,15 @@ public abstract class AdminPageTestBase : ConsoleTestBase
 
     internal AdminEnvironment Env { get; }
 
+    private bool _environmentDisposed;
+
     protected override void Dispose(bool disposing)
     {
-        if (disposing)
+        // bUnit's DisposeAsync (which xUnit calls) ends in Dispose(false), and only the synchronous path passes true: dispose the environment on both, once. It owns the server
+        // certificate provider (a Windows key container per test environment that is deleted only on dispose: open question 46) and a temp folder.
+        if (!_environmentDisposed)
         {
+            _environmentDisposed = true;
             Env.Dispose();
         }
 

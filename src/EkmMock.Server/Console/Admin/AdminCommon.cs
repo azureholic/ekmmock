@@ -19,6 +19,9 @@ internal enum ConsoleErrorCode
 
     /// <summary>The audit entry could not be written. The action has already been applied when this is raised for a completed change.</summary>
     AuditUnavailable,
+
+    /// <summary>Fault injection is not switched on in this process (<c>EKMMOCK_ENABLE_FAULTS</c> is not <c>true</c>): rules cannot be created or changed.</summary>
+    FaultsDisabled,
 }
 
 /// <summary>
@@ -42,6 +45,7 @@ internal sealed class ConsoleActionException : Exception
         ConsoleErrorCode.NotFound => StatusCodes.Status404NotFound,
         ConsoleErrorCode.Conflict => StatusCodes.Status409Conflict,
         ConsoleErrorCode.Forbidden => StatusCodes.Status403Forbidden,
+        ConsoleErrorCode.FaultsDisabled => StatusCodes.Status403Forbidden,
         _ => StatusCodes.Status503ServiceUnavailable,
     };
 
@@ -100,6 +104,13 @@ internal static class AuditActions
     public const string PlaygroundReveal = "playground.reveal";
     public const string PlaygroundRevealDenied = "playground.reveal.denied";
 
+    public const string FaultCreate = "fault.create";
+    public const string FaultUpdate = "fault.update";
+    public const string FaultDelete = "fault.delete";
+    public const string FaultEnable = "fault.enable";
+    public const string FaultDisable = "fault.disable";
+    public const string FaultClear = "fault.clear";
+    public const string FaultPreset = "fault.preset";
     // Written by the inspector service (M4); listed so the Audit page can offer them in its filter.
     public const string InspectorReveal = "inspector.reveal";
     public const string InspectorRevealDenied = "inspector.reveal.denied";
@@ -112,6 +123,7 @@ internal static class AuditActions
         NamespaceCreate, NamespaceUpdate, NamespaceDelete, TrustImport, TrustTestClient,
         CertificateUpload, CertificateGenerate,
         PlaygroundWrap, PlaygroundUnwrap, PlaygroundReveal, PlaygroundRevealDenied,
+        FaultCreate, FaultUpdate, FaultDelete, FaultEnable, FaultDisable, FaultClear, FaultPreset,
         InspectorReveal, InspectorRevealDenied, InspectorReplay,
     ];
 }

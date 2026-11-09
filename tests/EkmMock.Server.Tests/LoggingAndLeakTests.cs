@@ -11,7 +11,7 @@ public sealed class LoggingAndLeakTests
     private static readonly string[] AllowedLogFields =
     [
         "exchange_id", "request_id", "correlation_id", "pool_name", "namespace", "op", "key", "alg",
-        "status", "error_code", "duration_ms", "crypto_ms", "injected_delay_ms", "client_cn", "auth_failure", "exception_type",
+        "status", "error_code", "duration_ms", "crypto_ms", "injected_delay_ms", "fault", "client_cn", "auth_failure", "exception_type",
     ];
 
     private static IEnumerable<CapturedLog> RequestLines(EkmFactory factory)
@@ -33,6 +33,7 @@ public sealed class LoggingAndLeakTests
 
         var lines = RequestLines(factory).ToList();
         lines.Count.ShouldBe(5);
+        // Spec 9: Information up to 150 ms (LatencyWarningMs); these requests take well under a millisecond or two, so no line is a warning or an error.
         lines.ShouldAllBe(l => l.Level == LogLevel.Information);
         foreach (var line in lines)
         {

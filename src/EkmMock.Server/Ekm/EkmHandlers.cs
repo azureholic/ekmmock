@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using EkmMock.Crypto;
+using EkmMock.Server.Faults;
 using EkmMock.Server.Hosting;
 using Microsoft.Extensions.Options;
 
@@ -50,6 +51,7 @@ internal sealed class EkmHandlers
         finally
         {
             exchange.CryptoElapsed = Stopwatch.GetElapsedTime(started);
+            exchange.CryptoEndTimestamp = Stopwatch.GetTimestamp();
         }
 
         var response = metadata.Type == KeyType.Rsa && metadata.PublicKey is { } publicKey
@@ -127,6 +129,11 @@ internal sealed class EkmHandlers
 
             var started = Stopwatch.GetTimestamp();
             exchange.EngineCalled = true;
+            if (exchange.PendingFault is { Kind: FaultKind.KeyDisabled } disabled)
+            {
+                ThrowInjectedKeyDisabled(key, exchange, disabled);
+            }
+
             try
             {
                 output = wrap
@@ -136,6 +143,7 @@ internal sealed class EkmHandlers
             finally
             {
                 exchange.CryptoElapsed = Stopwatch.GetElapsedTime(started);
+                exchange.CryptoEndTimestamp = Stopwatch.GetTimestamp();
             }
 
             var response = ArrayPool<byte>.Shared.Rent(EkmResponse.ValueBodyLength(output.Length));
@@ -152,6 +160,17 @@ internal sealed class EkmHandlers
                 CryptographicOperations.ZeroMemory(output);
             }
         }
+    }
+
+    /// <summary>
+    /// The "key disabled (temporary)" fault (spec 10.2): the answer a really disabled key gives, decided without any change to the key store (only the read-only metadata lookup
+    /// runs, so that an unknown key still answers 404 the way the engine would). Reached after the syntax checks, like the engine's own state checks.
+    /// </summary>
+    private void ThrowInjectedKeyDisabled(KeyRef key, EkmRequestContext exchange, FaultDecision decision)
+    {
+        _ = _backend.GetMetadata(key) ?? throw new EkmProtocolException(ProxyErrorCode.KeyNotFound);
+        exchange.Fire(decision);
+        throw new EkmProtocolException(ProxyErrorCode.KeyDisabled, ProxyErrors.DefaultMessage(ProxyErrorCode.KeyDisabled, exchange.Operation));
     }
 
     private static string Base64UrlEncode(ReadOnlySpan<byte> bytes) => System.Buffers.Text.Base64Url.EncodeToString(bytes);

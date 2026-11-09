@@ -9,6 +9,7 @@
     <FluentNavLink Href="/namespaces" Icon="@(new Icons.Regular.Size20.PeopleCommunity())" data-nav="namespaces">Namespaces &amp; trust</FluentNavLink>
     <FluentNavLink Href="/certificates" Icon="@(new Icons.Regular.Size20.Certificate())" data-nav="certificates">Certificates</FluentNavLink>
     <FluentNavLink Href="/playground" Icon="@(new Icons.Regular.Size20.Beaker())" data-nav="playground">Playground</FluentNavLink>
+    <FluentNavLink Href="/faults" Icon="@(new Icons.Regular.Size20.Flash())" data-nav="faults">Fault injection</FluentNavLink>
 
     @if (Options.Value.ShowPlaceholderNavigation)
     {
@@ -26,8 +27,5 @@
 @code {
     private sealed record Placeholder(string Title, string Milestone, Icon Icon);
 
-    private static readonly Placeholder[] Placeholders =
-    [
-        new("Fault injection", "M7", new Icons.Regular.Size20.Flash()),
-    ];
+    private static readonly Placeholder[] Placeholders = [];
 }

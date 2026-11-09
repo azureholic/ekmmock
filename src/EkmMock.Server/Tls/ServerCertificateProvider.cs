@@ -42,6 +42,7 @@ internal sealed class ServerCertificateProvider : IServerCertificateProvider, ID
     private readonly ILogger<ServerCertificateProvider> _logger;
     private readonly object _gate = new();
     private readonly List<FileSystemWatcher> _watchers = [];
+    private readonly List<ServerCertificateSnapshot> _retired = [];
     private readonly Timer? _pollTimer;
     private readonly Timer? _debounceTimer;
 
@@ -239,6 +240,15 @@ internal sealed class ServerCertificateProvider : IServerCertificateProvider, ID
         _pollTimer?.Dispose();
         _debounceTimer?.Dispose();
         _current.Dispose();
+        lock (_gate)
+        {
+            foreach (var retired in _retired)
+            {
+                retired.Dispose();
+            }
+
+            _retired.Clear();
+        }
     }
 
     // A timer callback must never throw (an unhandled exception on a timer thread ends the process).
@@ -312,8 +322,22 @@ internal sealed class ServerCertificateProvider : IServerCertificateProvider, ID
         var previous = Interlocked.Exchange(ref _current, candidate);
         LogLoaded(candidate, "now serving");
 
-        // A handshake that started before the swap may still be using the old certificate; release it after a grace period.
-        _ = Task.Delay(_options.RetiredCertificateGrace).ContinueWith(_ => previous.Dispose(), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+        // A handshake that started before the swap may still be using the old certificate; release it after a grace period. Until then it is tracked, so that disposing
+        // the provider releases it at once: its private key is a file in the Windows key store that is only deleted when the certificate is disposed (DECISIONS "M7: Windows key container leak").
+        _retired.Add(previous);
+        _ = Task.Delay(_options.RetiredCertificateGrace).ContinueWith(
+            _ =>
+            {
+                lock (_gate)
+                {
+                    _retired.Remove(previous);
+                }
+
+                previous.Dispose();
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.None,
+            TaskScheduler.Default);
 
         try
         {

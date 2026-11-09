@@ -67,8 +67,10 @@ public sealed class ArchitectureTests
         types.ShouldNotContain(static t => t.Name.Contains("AllowAll", StringComparison.OrdinalIgnoreCase));
         types.ShouldNotContain(static t => t.Name.Contains("PlainHttp", StringComparison.OrdinalIgnoreCase));
 
+        // MetricsOptions.AllowAnonymous (spec 9, M7) opens the console-port /metrics endpoint to scrapers that cannot sign in with Entra ID. It has nothing to do with the EKM endpoint:
+        // it is exempt from the name scan below, and a second check proves that no EKM pipeline source can even see it.
         var optionProperties = types
-            .Where(static t => t.Name.EndsWith("Options", StringComparison.Ordinal))
+            .Where(static t => t.Name.EndsWith("Options", StringComparison.Ordinal) && t.Name != "MetricsOptions")
             .SelectMany(static t => t.GetProperties())
             .Select(static p => p.Name)
             .ToList();
@@ -76,6 +78,10 @@ public sealed class ArchitectureTests
             || n.Contains("AllowAnonymous", StringComparison.OrdinalIgnoreCase)
             || n.Contains("InsecureHttp", StringComparison.OrdinalIgnoreCase)
             || n.Contains("SkipClientCertificate", StringComparison.OrdinalIgnoreCase));
+        foreach (var file in Directory.EnumerateFiles(Path.Combine(RepoPaths.Src("EkmMock.Server"), "Ekm"), "*.cs").Concat(Directory.EnumerateFiles(Path.Combine(RepoPaths.Src("EkmMock.Server"), "Faults"), "*.cs")))
+        {
+            File.ReadAllText(file).Contains("MetricsOptions", StringComparison.Ordinal).ShouldBeFalse($"{Path.GetFileName(file)} must not depend on the console metrics option");
+        }
 
         // The shipped configuration offers https only, and parsing refuses anything else.
         var settings = File.ReadAllText(Path.Combine(RepoPaths.Src("EkmMock.Server"), "appsettings.json"));

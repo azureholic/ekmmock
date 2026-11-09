@@ -109,7 +109,7 @@
                                     <span role="cell" class="cell-fault" data-role="fault">
                                         @if (exchange.Faults is { } fault)
                                         {
-                                            <FluentBadge Appearance="Appearance.Accent">fault: @fault.Rule</FluentBadge>
+                                            <FluentBadge Appearance="Appearance.Accent" title="@ConsoleDisplay.FaultTitle(fault)">fault: @fault.Label</FluentBadge>
                                         }
                                     </span>
                                 </div>

@@ -41,6 +41,9 @@ public sealed class ConsolePortSeparationTests : IAsyncLifetime
         "/api/console/status",
         "/api/console/exchanges",
         "/api/console/keys",
+        "/api/console/faults",
+        "/faults",
+        "/playground",
         "/_blazor/negotiate?negotiateVersion=1",
         "/_blazor",
         "/_framework/blazor.web.js",
@@ -89,10 +92,25 @@ public sealed class ConsolePortSeparationTests : IAsyncLifetime
                 foreach (var method in new[] { HttpMethod.Get, HttpMethod.Post })
                 {
                     using var request = new HttpRequestMessage(method, path);
-                    using var response = await http.SendAsync(request);
+                    HttpResponseMessage response;
+                    try
+                    {
+                        response = await http.SendAsync(request);
+                    }
+                    catch (HttpRequestException ex)
+                    {
+                        // Open question 47: when the rare "chain not trusted" handshake failure happens, say what the server decided (its recorded verdict), so the next occurrence is diagnosable.
+                        var failures = string.Join(" | ", _host.Inspector.ConnectionEvents(limit: 20)
+                            .Where(static e => e.Kind == "handshake_failed")
+                            .Select(static e => $"{e.FailureReason}: {e.FailureDescription} / {e.FailureDetail}"));
+                        throw new InvalidOperationException($"{method} {path} failed: {ex.Message}. Server-side handshake failures: {failures}", ex);
+                    }
 
-                    response.StatusCode.ShouldBe(HttpStatusCode.NotFound, $"{method} {path} on the EKM port");
-                    (await response.Content.ReadAsStringAsync()).ShouldNotContain("EkmMock console");
+                    using (response)
+                    {
+                        response.StatusCode.ShouldBe(HttpStatusCode.NotFound, $"{method} {path} on the EKM port");
+                        (await response.Content.ReadAsStringAsync()).ShouldNotContain("EkmMock console");
+                    }
                 }
             }
         }

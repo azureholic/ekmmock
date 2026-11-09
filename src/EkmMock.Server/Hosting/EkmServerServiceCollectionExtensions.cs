@@ -1,7 +1,9 @@
 using EkmMock.Crypto;
 using EkmMock.Server.Connections;
 using EkmMock.Server.Ekm;
+using EkmMock.Server.Faults;
 using EkmMock.Server.Inspector;
+using EkmMock.Server.Metrics;
 using EkmMock.Server.Tls;
 using EkmMock.Server.WebConsole;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
@@ -96,7 +98,12 @@ internal static class EkmServerServiceCollectionExtensions
         });
         services.TryAddSingleton<IConnectionEventSink>(static sp => sp.GetRequiredService<ConnectionEventSink>());
         services.TryAddSingleton<ConnectionEventStore>();
-        services.TryAddSingleton<EkmMetrics>();
+        services.TryAddSingleton<EkmMetrics>(static sp =>
+        {
+            var metrics = new EkmMetrics();
+            metrics.SetInFlightSource(() => sp.GetRequiredService<ConcurrencyGate>().InFlight);
+            return metrics;
+        });
         services.TryAddSingleton<EkmListenerPorts>();
         services.TryAddSingleton<IEkmPortPolicy>(static sp => sp.GetRequiredService<EkmListenerPorts>());
         services.TryAddSingleton<ServerCertificateProvider>();
@@ -158,6 +165,14 @@ internal static class EkmServerServiceCollectionExtensions
         });
 
         services.TryAddSingleton<EkmStartupState>();
+
+        // ---- Limits, fault injection, metrics (M7, spec 9, 10) ----
+        services.AddOptions<FaultOptions>().BindConfiguration(FaultOptions.SectionName);
+        services.AddOptions<MetricsOptions>().BindConfiguration(MetricsOptions.SectionName);
+        services.TryAddSingleton<ConcurrencyGate>();
+        services.TryAddSingleton<IFaultGate, EnvironmentFaultGate>();
+        services.TryAddSingleton<IFaultRandom, SystemFaultRandom>();
+        services.TryAddSingleton<FaultRuleStore>();
         services.TryAddSingleton<IEngineAvailability, DefaultEngineAvailability>();
         services.TryAddSingleton<EkmHandlers>();
         services.TryAddSingleton<EkmDispatcher>();

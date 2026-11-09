@@ -5,7 +5,7 @@ namespace EkmMock.Server.Hosting;
 
 /// <summary>
 /// The seam for "is the engine usable right now?". <c>info</c> and every key operation answer
-/// <c>503 HsmUnavailable</c> when it says no. M7 adds the "HSM offline" fault by decorating or replacing it.
+/// <c>503 HsmUnavailable</c> when it says no. The "HSM offline" fault (M7, spec 10.2) is part of <see cref="DefaultEngineAvailability"/>.
 /// A single corrupt key does NOT make the engine unavailable: that key alone answers 503 (spec 6.2, test 19).
 /// </summary>
 internal interface IEngineAvailability
@@ -35,14 +35,17 @@ internal sealed class DefaultEngineAvailability : IEngineAvailability
 {
     private readonly ICryptoBackend _backend;
     private readonly EkmStartupState _startup;
+    private readonly Faults.FaultRuleStore _faults;
 
-    public DefaultEngineAvailability(ICryptoBackend backend, EkmStartupState startup)
+    public DefaultEngineAvailability(ICryptoBackend backend, EkmStartupState startup, Faults.FaultRuleStore faults)
     {
         _backend = backend;
         _startup = startup;
+        _faults = faults;
     }
 
-    public bool IsAvailable => _startup.IsReady && _backend.IsAvailable;
+    /// <summary>The engine is usable when the key store is loaded and the self-test ran, and no "HSM offline" fault (spec 10.2) is on.</summary>
+    public bool IsAvailable => _startup.IsReady && _backend.IsAvailable && !_faults.IsHsmOffline;
 }
 
 /// <summary>Hands out the sequential exchange ids (spec 8.1).</summary>

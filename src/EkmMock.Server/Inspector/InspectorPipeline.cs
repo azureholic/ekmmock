@@ -1,4 +1,5 @@
 using EkmMock.Server.Connections;
+using EkmMock.Server.Metrics;
 using Microsoft.Extensions.Options;
 
 namespace EkmMock.Server.Inspector;

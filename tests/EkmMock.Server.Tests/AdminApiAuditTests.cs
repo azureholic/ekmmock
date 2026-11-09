@@ -18,7 +18,7 @@ public sealed class AdminApiAuditTests : IAsyncLifetime
 
     public async ValueTask InitializeAsync()
     {
-        _host = await ConsoleTestHost.StartAsync(allowReveal: true, allowKeyImport: true);
+        _host = await ConsoleTestHost.StartAsync(allowReveal: true, allowKeyImport: true, faults: true);
         _api = new AdminApi(_host.Host.CreateConsoleClient());
     }
 
@@ -169,6 +169,20 @@ public sealed class AdminApiAuditTests : IAsyncLifetime
         }
 
         await Step("namespace.delete", "namespace:walk", () => Task.FromResult(namespaces.Delete(actor, "walk", "walk", destroyKeys: false)));
+
+        // Fault injection (M7): the host of this class switches it on; rule ids are f1, f2, ... per process.
+        var faults = services.GetRequiredService<FaultAdminService>();
+        await Step("fault.create", "fault:f1", () => Task.FromResult(faults.Create(actor, new FaultRuleRequest("delay", DelayMs: 100, Description: "walker-description-not-audited"))));
+        await Step("fault.update", "fault:f1", () => Task.FromResult(faults.Update(actor, "f1", new FaultRuleRequest("delay", DelayMs: 150))));
+        await Step("fault.disable", "fault:f1", () => Task.FromResult(faults.SetEnabled(actor, "f1", false)));
+        await Step("fault.enable", "fault:f1", () => Task.FromResult(faults.SetEnabled(actor, "f1", true)));
+        await Step("fault.preset", "fault:f2", () => Task.FromResult(faults.ApplyPreset(actor, "hsm-offline")));
+        await Step("fault.delete", "fault:f1", () =>
+        {
+            faults.Delete(actor, "f1");
+            return Task.CompletedTask;
+        });
+        await Step("fault.clear", "fault:*", () => Task.FromResult(faults.Clear(actor)));
 
         // Every action the console can write is either walked here or has a dedicated test (the denied reveal and the inspector's own actions).
         walked.Distinct().Order().ShouldBe(

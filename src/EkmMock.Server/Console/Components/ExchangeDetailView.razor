@@ -72,7 +72,11 @@ else
             }
             @if (record.Faults is { } fault)
             {
-                <dt>Fault</dt><dd><FluentBadge Appearance="Appearance.Accent">fault: @fault.Rule</FluentBadge></dd>
+                <dt>Fault</dt>
+                <dd>
+                    <FluentBadge Appearance="Appearance.Accent" title="@ConsoleDisplay.FaultTitle(fault)" data-role="detail-fault">fault: @fault.Label</FluentBadge>
+                    <span class="detail-note" data-role="detail-fault-rule">rule @fault.Rule@(string.IsNullOrWhiteSpace(fault.Description) ? null : ": " + fault.Description)</span>
+                </dd>
             }
         </dl>
 
@@ -173,7 +177,7 @@ else
             }
             else
             {
-                <p class="detail-line"><strong class="@ConsoleDisplay.StatusCss(record.Status)">@ConsoleDisplay.StatusText(record.Status, record.Response.Code)</strong>@(record.Response.ClientAborted ? " (the client went away before the response was written)" : null)</p>
+                <p class="detail-line"><strong class="@ConsoleDisplay.StatusCss(record.Status)">@ConsoleDisplay.StatusText(record.Status, record.Response.Code)</strong>@(record.Response.ClientAborted ? " (no response was sent: the client went away first)" : record.Response.ClosedByServer ? " (no response was sent: the connection was closed by a fault rule)" : null)</p>
             }
 
             <h3>Headers</h3>

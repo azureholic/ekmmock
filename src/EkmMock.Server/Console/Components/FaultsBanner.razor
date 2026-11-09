@@ -1,11 +1,16 @@
 @implements IDisposable
 @inject IFaultStatus Faults
 
-@* Spec 10.2: "A banner at the top of every console page says faults are active." Fault injection arrives with M7; the banner follows IFaultStatus from now on. *@
+@* Spec 10.2: "A banner at the top of every console page says faults are active." It follows IFaultStatus: it appears when the first rule becomes active (or an HSM-offline rule is on) and goes away when the last one is removed, disabled or expires. *@
 @if (Faults.Active)
 {
     <ConsoleAlert Intent="AlertIntent.Warning" Title="Faults active" DataRole="faults-banner" Class="console-banner banner-faults">
-        Fault injection is active: EKM requests may be delayed, failed or dropped on purpose.
+        Fault injection is active: EKM requests may be delayed, failed or dropped on purpose@(Faults.ActiveRules > 0 ? $" ({Faults.ActiveRules} active rule{(Faults.ActiveRules == 1 ? string.Empty : "s")})" : null).
+        @if (Faults.HsmOffline)
+        {
+            <strong data-role="faults-banner-offline"> The HSM is simulated as offline: info and every operation answer 503.</strong>
+        }
+        <a class="banner-link" href="/faults" data-role="faults-banner-link">Manage fault rules</a>
     </ConsoleAlert>
 }
 

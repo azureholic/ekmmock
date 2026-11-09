@@ -1,8 +1,12 @@
 using System.Collections;
 using System.Diagnostics;
 using EkmMock.Server.Connections;
+using EkmMock.Server.Faults;
 using EkmMock.Server.Hosting;
+using EkmMock.Server.Inspector;
+using EkmMock.Server.Metrics;
 using EkmMock.Server.WebConsole;
+using Microsoft.Extensions.Options;
 
 namespace EkmMock.Server.Ekm;
 
@@ -18,14 +22,25 @@ internal sealed class EkmExchangeMiddleware
     private readonly TimeProvider _time;
     private readonly ILogger _logger;
     private readonly Connections.ConnectionRegistry _connections;
+    private readonly EkmMetrics _metrics;
+    private readonly LimitsOptions _limits;
 
-    public EkmExchangeMiddleware(RequestDelegate next, ExchangeCounter counter, TimeProvider time, ILoggerFactory loggerFactory, Connections.ConnectionRegistry connections)
+    public EkmExchangeMiddleware(
+        RequestDelegate next,
+        ExchangeCounter counter,
+        TimeProvider time,
+        ILoggerFactory loggerFactory,
+        Connections.ConnectionRegistry connections,
+        EkmMetrics metrics,
+        IOptions<LimitsOptions> limits)
     {
         _next = next;
         _counter = counter;
         _time = time;
         _logger = loggerFactory.CreateLogger("EkmMock.Exchange");
         _connections = connections;
+        _metrics = metrics;
+        _limits = limits.Value;
     }
 
     public async Task InvokeAsync(HttpContext context)
@@ -50,8 +65,30 @@ internal sealed class EkmExchangeMiddleware
         finally
         {
             exchange.Duration = Stopwatch.GetElapsedTime(exchange.StartTimestamp);
-            exchange.StatusCode = exchange.ClientAborted ? 499 : context.Response.StatusCode;
-            EkmExchangeLog.Write(_logger, exchange);
+
+            // 499 = no HTTP response was sent: the client gave up (blackhole, timeout) or a fault rule closed the connection. Whatever status the response object holds is meaningless then.
+            exchange.StatusCode = exchange.ClientAborted || exchange.ClosedByFault ? NoResponseStatus : context.Response.StatusCode;
+            RecordMetrics(exchange);
+            EkmExchangeLog.Write(_logger, exchange, _limits);
+        }
+    }
+
+    /// <summary>The status recorded (log, inspector, metrics) for an exchange that never got an HTTP response.</summary>
+    public const int NoResponseStatus = 499;
+
+    private void RecordMetrics(EkmRequestContext exchange)
+    {
+        try
+        {
+            _metrics.RecordRequest(exchange.Operation, exchange.StatusCode, exchange.NamespaceName, exchange.Duration);
+            if (exchange.EngineCalled && exchange.CryptoEndTimestamp != 0)
+            {
+                _metrics.RecordCrypto(exchange.Operation, exchange.Algorithm, exchange.CryptoElapsed);
+            }
+        }
+        catch (Exception)
+        {
+            // Metrics must never turn a served request into a failure.
         }
     }
 
@@ -126,8 +163,10 @@ internal static class EkmPipeline
             // Routing is resolved early because faults (per namespace/key/op) and auth (per namespace) both need it.
             branch.UseMiddleware<EkmRouteMiddleware>();
 
-            // [M7] Faults slot in before Auth; [M7] Limits after it.
+            // Spec 7: Route → Faults → Auth → Limits → handlers.
+            branch.UseMiddleware<Faults.EkmFaultsMiddleware>();
             branch.UseMiddleware<EkmAuthMiddleware>();
+            branch.UseMiddleware<EkmLimitsMiddleware>();
 
             branch.Run(static context => context.RequestServices.GetRequiredService<EkmDispatcher>().InvokeAsync(context));
         });
@@ -147,14 +186,33 @@ internal static class EkmPipeline
 }
 
 /// <summary>
-/// The structured request log line (spec 9): every field of the spec list (<c>injected_delay_ms</c> is zero until M7). It is built from fixed fields only:
-/// never <c>value</c>, <c>n</c>, <c>e</c>, bodies or headers. The 150/250 ms warning and error levels of spec 9 are M7 (see DECISIONS "M4").
+/// The structured request log line (spec 9): every field of the spec list. It is built from fixed fields only: never <c>value</c>, <c>n</c>, <c>e</c>, bodies or headers.
+/// <para>
+/// Level (spec 9): <b>Warning</b> when <c>duration_ms</c> is strictly above <see cref="LimitsOptions.LatencyWarningMs"/> (150 ms), <b>Error</b> when strictly above
+/// <see cref="LimitsOptions.LatencyBudgetMs"/> (250 ms) or when the failure was an unexpected exception; otherwise Information. The two thresholds are the same options that
+/// colour the budget indicator (green / amber / red), so a console that is amber logs a warning.
+/// </para>
 /// </summary>
 internal static class EkmExchangeLog
 {
-    public static void Write(ILogger logger, EkmRequestContext exchange)
+    public static LogLevel LevelFor(EkmRequestContext exchange, LimitsOptions limits)
     {
-        var level = exchange.UnexpectedExceptionType is null ? LogLevel.Information : LogLevel.Error;
+        if (exchange.UnexpectedExceptionType is not null)
+        {
+            return LogLevel.Error;
+        }
+
+        return LevelFor(exchange.Duration.TotalMilliseconds, limits);
+    }
+
+    public static LogLevel LevelFor(double durationMs, LimitsOptions limits)
+        => durationMs > limits.LatencyBudgetMs ? LogLevel.Error
+            : durationMs > limits.LatencyWarningMs ? LogLevel.Warning
+            : LogLevel.Information;
+
+    public static void Write(ILogger logger, EkmRequestContext exchange, LimitsOptions limits)
+    {
+        var level = LevelFor(exchange, limits);
         if (!logger.IsEnabled(level))
         {
             return;
@@ -184,7 +242,8 @@ internal static class EkmExchangeLog
                 new("duration_ms", Math.Round(e.Duration.TotalMilliseconds, 3)),
                 new("crypto_ms", Math.Round(e.CryptoElapsed.TotalMilliseconds, 3)),
                 new("injected_delay_ms", Math.Round(e.InjectedDelay.TotalMilliseconds, 3)),
-                new("client_cn", e.Authentication?.CommonName),
+                new("fault", e.Fault is { } fault ? $"{fault.Rule.Id}:{fault.Kind.WireName()}" : null),
+                new("client_cn", e.ClientCommonName),
                 new("auth_failure", e.Authentication is { Succeeded: false } auth ? auth.Failure.ToString() : null),
                 new("exception_type", e.UnexpectedExceptionType),
             ];

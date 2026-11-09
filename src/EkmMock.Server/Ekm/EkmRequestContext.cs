@@ -67,14 +67,38 @@ internal sealed class EkmRequestContext
     /// <summary>Time spent in the Auth stage (certificate chain build and CN check); zero when Auth did not run.</summary>
     public TimeSpan AuthElapsed { get; set; }
 
-    /// <summary>Delay injected by a fault rule before the crypto call. Filled by M7; zero until then.</summary>
+    /// <summary>Delay injected by a fault rule before the crypto call (spec 10.2), as measured; zero when no delay rule fired.</summary>
     public TimeSpan InjectedDelay { get; set; }
 
-    /// <summary>Time spent waiting for a concurrency slot. Filled by M7 (Limits); zero until then.</summary>
+    /// <summary>
+    /// "Queue wait" (spec 8.1): the server time between the start of the request and the start of the crypto stage that is neither authorization nor injected delay, i.e. the
+    /// time spent reading the request, routing and waiting to be scheduled. EkmMock has no queue (over the concurrency limit is an immediate 429), see DECISIONS.md "M7: Limits".
+    /// </summary>
     public TimeSpan QueueWait { get; set; }
 
-    /// <summary>Name of the fault rule that fired on this exchange (M7); null when none did.</summary>
-    public string? FaultRule { get; set; }
+    /// <summary>The fault that fired on this exchange (M7), i.e. that actually acted on it; null when none did. See <see cref="Faults.FaultDecisions.Fire"/>.</summary>
+    public Faults.FaultDecision? Fault { get; set; }
+
+    /// <summary>
+    /// The fault chosen by the Faults stage that acts later (blackhole in the Limits slot, delay and key-disabled right before the crypto call). It becomes <see cref="Fault"/>
+    /// only when the stage that carries it out is reached: a request that Auth or the validation rejects first is not delayed, not held, and not flagged.
+    /// </summary>
+    public Faults.FaultDecision? PendingFault { get; set; }
+
+    /// <summary>Id of the fault rule that fired on this exchange (M7); null when none did.</summary>
+    public string? FaultRule => Fault?.Rule.Id;
+
+    /// <summary>The internal deadline (spec 10.1) together with <c>RequestAborted</c>; default (never cancelled) when the Limits stage did not run.</summary>
+    public CancellationToken DeadlineToken { get; set; }
+
+    /// <summary>True when the request was refused because the internal deadline passed before the crypto call could start (counted as budget exceeded).</summary>
+    public bool DeadlineExceeded { get; set; }
+
+    /// <summary><see cref="System.Diagnostics.Stopwatch.GetTimestamp"/> at the moment the crypto call returned; 0 when there was none.</summary>
+    public long CryptoEndTimestamp { get; set; }
+
+    /// <summary>True when a fault rule aborted the connection without a response (close-connection, or a blackhole that reached its hold cap).</summary>
+    public bool ClosedByFault { get; set; }
 
     /// <summary>True once a handler asked the crypto engine about the key (so the inspector may read the key's type, size and usage counters).</summary>
     public bool EngineCalled { get; set; }
@@ -90,6 +114,15 @@ internal sealed class EkmRequestContext
 
     /// <summary>The outcome of the Auth stage (client certificate facts, chain result, CN allowed, namespace matched); null until Auth ran.</summary>
     public EkmAuthResult? Authentication { get; set; }
+
+    /// <summary>
+    /// The single common name of the client certificate the TLS handshake accepted, read when a fault answers <em>before</em> Auth (spec 7: Faults come first), so that the log and
+    /// the inspector can still say who called. It is display text only: authorization for the namespace has not been evaluated. Null otherwise.
+    /// </summary>
+    public string? PresentedCommonName { get; set; }
+
+    /// <summary>The caller's common name for the log and the inspector: the authorized one when Auth ran, else the one the handshake presented (faults before Auth).</summary>
+    public string? ClientCommonName => Authentication?.CommonName ?? PresentedCommonName;
 
     /// <summary>The connection this exchange arrived on (TLS facts, handshake time), or null when there is none (in-process test host).</summary>
     public Connections.ConnectionState? Connection { get; set; }
