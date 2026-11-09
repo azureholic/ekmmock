@@ -19,6 +19,8 @@
     <ProjectReference Include="..\..\src\EkmMock.Server\EkmMock.Server.csproj" />
     <ProjectReference Include="..\..\src\EkmMock.Pki\EkmMock.Pki.csproj" />
     <ProjectReference Include="..\EkmMock.TestSupport\EkmMock.TestSupport.csproj" />
+    <!-- M8: the CLI end to end against the in-process EntraId console (bearer path) -->
+    <ProjectReference Include="..\..\src\EkmMock.Cli\EkmMock.Cli.csproj" />
   </ItemGroup>
 
   <ItemGroup>

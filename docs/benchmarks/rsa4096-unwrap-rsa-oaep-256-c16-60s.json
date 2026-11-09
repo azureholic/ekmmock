@@ -1,0 +1,160 @@
+{
+  "tool": "ekmmock test bench",
+  "version": "0.2.0",
+  "started_at_utc": "2026-11-09T20:56:30.9681112+00:00",
+  "target": "https://127.0.0.1:28443",
+  "operation": "unwrapkey",
+  "key": "rsa-key-4096",
+  "algorithm": "RSA-OAEP-256",
+  "concurrency": 16,
+  "duration_seconds": 60,
+  "warmup_seconds": 5,
+  "model": "closed loop: each worker sends its next request when the previous one is answered (does not correct coordinated omission)",
+  "requests": 113628,
+  "errors": 0,
+  "throughput_rps": 1893.6,
+  "latency_ms": {
+    "min": 3.459,
+    "mean": 8.447,
+    "p50": 8.191,
+    "p90": 11.903,
+    "p99": 18.687,
+    "p999": 37.631,
+    "max": 170.684
+  },
+  "over_budget": {
+    "threshold_ms": 250,
+    "count": 0,
+    "percent": 0
+  },
+  "status_counts": {
+    "200": 113628
+  },
+  "histogram": [
+    {
+      "le": "\u003C= 1 ms",
+      "count": 0
+    },
+    {
+      "le": "\u003C= 2 ms",
+      "count": 0
+    },
+    {
+      "le": "\u003C= 5 ms",
+      "count": 11531
+    },
+    {
+      "le": "\u003C= 10 ms",
+      "count": 71798
+    },
+    {
+      "le": "\u003C= 25 ms",
+      "count": 29847
+    },
+    {
+      "le": "\u003C= 50 ms",
+      "count": 390
+    },
+    {
+      "le": "\u003C= 100 ms",
+      "count": 46
+    },
+    {
+      "le": "\u003C= 150 ms",
+      "count": 0
+    },
+    {
+      "le": "\u003C= 200 ms",
+      "count": 16
+    },
+    {
+      "le": "\u003C= 250 ms",
+      "count": 0
+    },
+    {
+      "le": "\u003C= 500 ms",
+      "count": 0
+    },
+    {
+      "le": "\u003C= 1000 ms",
+      "count": 0
+    },
+    {
+      "le": "\u003E 1000 ms",
+      "count": 0
+    }
+  ],
+  "threshold_failures": [],
+  "slow_requests": [
+    {
+      "offset_seconds": 34.415,
+      "latency_ms": 170.7
+    },
+    {
+      "offset_seconds": 34.423,
+      "latency_ms": 162.6
+    },
+    {
+      "offset_seconds": 34.423,
+      "latency_ms": 162.2
+    },
+    {
+      "offset_seconds": 34.423,
+      "latency_ms": 162.3
+    },
+    {
+      "offset_seconds": 34.43,
+      "latency_ms": 155
+    },
+    {
+      "offset_seconds": 34.431,
+      "latency_ms": 154.9
+    },
+    {
+      "offset_seconds": 34.431,
+      "latency_ms": 159.5
+    },
+    {
+      "offset_seconds": 34.431,
+      "latency_ms": 159.6
+    },
+    {
+      "offset_seconds": 34.431,
+      "latency_ms": 155
+    },
+    {
+      "offset_seconds": 34.431,
+      "latency_ms": 155
+    },
+    {
+      "offset_seconds": 34.431,
+      "latency_ms": 159.6
+    },
+    {
+      "offset_seconds": 34.431,
+      "latency_ms": 155.1
+    },
+    {
+      "offset_seconds": 34.431,
+      "latency_ms": 159.6
+    },
+    {
+      "offset_seconds": 34.431,
+      "latency_ms": 159.9
+    },
+    {
+      "offset_seconds": 34.431,
+      "latency_ms": 159.9
+    },
+    {
+      "offset_seconds": 34.434,
+      "latency_ms": 152
+    }
+  ],
+  "environment": {
+    "os": "Microsoft Windows 10.0.26300",
+    "architecture": "X64",
+    "runtime": ".NET 10.0.14",
+    "processor_count": 8
+  }
+}

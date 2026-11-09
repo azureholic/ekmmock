@@ -9,6 +9,13 @@
       JsonSerializerContext); an architecture test scans the sources so that reflection serialization cannot creep into our own code. See DECISIONS.md "M5: JSON".
     -->
     <JsonSerializerIsReflectionEnabledByDefault>true</JsonSerializerIsReflectionEnabledByDefault>
+    <!--
+      M8 (benchmark, DECISIONS "M8: Benchmark"): Server GC, as spec 11.1 asks for the container image. At the load of spec 14 test 25 (about 30,000 requests/s) every exchange is retained in the inspector's ring buffer for
+      a third of a second, so the heap promotes continuously; workstation GC paused 5 to 20 times per second for 10 to 300 ms (about 10 % of the time), Server GC (one heap per core, larger gen0 budget) makes the pauses rarer and shorter.
+      Concurrent (background) GC stays on.
+    -->
+    <ServerGarbageCollector>true</ServerGarbageCollector>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
   </PropertyGroup>
 
   <ItemGroup>

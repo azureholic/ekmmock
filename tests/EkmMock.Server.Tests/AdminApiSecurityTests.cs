@@ -46,6 +46,7 @@ public sealed class AdminApiSecurityTests : IAsyncLifetime
     public static TheoryData<string, string> MutatingEndpoints => new()
     {
         { "POST", "/api/console/keys" },
+        { "POST", "/api/console/keys/import" },
         { "POST", "/api/console/keys/_default/aes-key-1/enable" },
         { "POST", "/api/console/keys/_default/aes-key-1/disable" },
         { "POST", "/api/console/keys/_default/aes-key-1/expiry" },

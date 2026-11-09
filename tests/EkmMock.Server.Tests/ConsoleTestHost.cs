@@ -86,7 +86,8 @@ internal sealed class ConsoleTestHost : IAsyncDisposable
         bool faults = false,
         EkmMock.Server.Faults.IFaultRandom? faultRandom = null,
         Microsoft.Extensions.Logging.LogLevel? minLogLevel = null,
-        Action<IServiceCollection>? configureServices = null)
+        Action<IServiceCollection>? configureServices = null,
+        bool testAuthScheme = true)
     {
         if (entra)
         {
@@ -135,7 +136,7 @@ internal sealed class ConsoleTestHost : IAsyncDisposable
                     services.AddSingleton(faultRandom);
                 }
 
-                if (entra)
+                if (entra && testAuthScheme)
                 {
                     services.AddAuthentication().AddScheme<AuthenticationSchemeOptions, TestAuthHandler>(TestAuthHandler.SchemeName, null);
                     services.PostConfigure<AuthenticationOptions>(o =>

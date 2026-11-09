@@ -1,0 +1,165 @@
+{
+  "tool": "ekmmock test bench",
+  "version": "0.2.0",
+  "started_at_utc": "2026-11-09T21:04:25.8129007+00:00",
+  "target": "https://127.0.0.1:28443",
+  "operation": "unwrapkey",
+  "key": "aes-key-1",
+  "algorithm": "A256KWP",
+  "concurrency": 16,
+  "duration_seconds": 60,
+  "warmup_seconds": 5,
+  "target_rate": 1000,
+  "model": "open loop at 1000 requests/s: latency is measured from the scheduled start (corrects coordinated omission)",
+  "requests": 60000,
+  "errors": 0,
+  "throughput_rps": 1000,
+  "latency_ms": {
+    "min": 0.122,
+    "mean": 0.569,
+    "p50": 0.225,
+    "p90": 0.389,
+    "p99": 5.471,
+    "p999": 63.743,
+    "max": 115.671
+  },
+  "over_budget": {
+    "threshold_ms": 250,
+    "count": 0,
+    "percent": 0
+  },
+  "status_counts": {
+    "200": 60000
+  },
+  "histogram": [
+    {
+      "le": "\u003C= 1 ms",
+      "count": 58967
+    },
+    {
+      "le": "\u003C= 2 ms",
+      "count": 322
+    },
+    {
+      "le": "\u003C= 5 ms",
+      "count": 102
+    },
+    {
+      "le": "\u003C= 10 ms",
+      "count": 92
+    },
+    {
+      "le": "\u003C= 25 ms",
+      "count": 225
+    },
+    {
+      "le": "\u003C= 50 ms",
+      "count": 201
+    },
+    {
+      "le": "\u003C= 100 ms",
+      "count": 74
+    },
+    {
+      "le": "\u003C= 150 ms",
+      "count": 17
+    },
+    {
+      "le": "\u003C= 200 ms",
+      "count": 0
+    },
+    {
+      "le": "\u003C= 250 ms",
+      "count": 0
+    },
+    {
+      "le": "\u003C= 500 ms",
+      "count": 0
+    },
+    {
+      "le": "\u003C= 1000 ms",
+      "count": 0
+    },
+    {
+      "le": "\u003E 1000 ms",
+      "count": 0
+    }
+  ],
+  "threshold_failures": [],
+  "slow_requests": [
+    {
+      "offset_seconds": 9.667,
+      "latency_ms": 115.7
+    },
+    {
+      "offset_seconds": 9.668,
+      "latency_ms": 114.7
+    },
+    {
+      "offset_seconds": 9.669,
+      "latency_ms": 113.7
+    },
+    {
+      "offset_seconds": 9.67,
+      "latency_ms": 112.6
+    },
+    {
+      "offset_seconds": 9.671,
+      "latency_ms": 111.2
+    },
+    {
+      "offset_seconds": 9.672,
+      "latency_ms": 110.7
+    },
+    {
+      "offset_seconds": 9.673,
+      "latency_ms": 109.5
+    },
+    {
+      "offset_seconds": 9.674,
+      "latency_ms": 108.2
+    },
+    {
+      "offset_seconds": 9.675,
+      "latency_ms": 107.7
+    },
+    {
+      "offset_seconds": 9.676,
+      "latency_ms": 106.9
+    },
+    {
+      "offset_seconds": 9.677,
+      "latency_ms": 105.9
+    },
+    {
+      "offset_seconds": 9.678,
+      "latency_ms": 104.8
+    },
+    {
+      "offset_seconds": 9.679,
+      "latency_ms": 103.8
+    },
+    {
+      "offset_seconds": 9.68,
+      "latency_ms": 102.8
+    },
+    {
+      "offset_seconds": 9.681,
+      "latency_ms": 101.9
+    },
+    {
+      "offset_seconds": 9.682,
+      "latency_ms": 100.8
+    },
+    {
+      "offset_seconds": 9.683,
+      "latency_ms": 100.6
+    }
+  ],
+  "environment": {
+    "os": "Microsoft Windows 10.0.26300",
+    "architecture": "X64",
+    "runtime": ".NET 10.0.14",
+    "processor_count": 8
+  }
+}

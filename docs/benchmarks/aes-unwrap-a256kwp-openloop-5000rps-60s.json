@@ -1,0 +1,96 @@
+{
+  "tool": "ekmmock test bench",
+  "version": "0.2.0",
+  "started_at_utc": "2026-11-09T21:05:31.4505593+00:00",
+  "target": "https://127.0.0.1:28443",
+  "operation": "unwrapkey",
+  "key": "aes-key-1",
+  "algorithm": "A256KWP",
+  "concurrency": 16,
+  "duration_seconds": 60,
+  "warmup_seconds": 5,
+  "target_rate": 5000,
+  "model": "open loop at 5000 requests/s: latency is measured from the scheduled start (corrects coordinated omission)",
+  "requests": 300000,
+  "errors": 0,
+  "throughput_rps": 4999.9,
+  "latency_ms": {
+    "min": 0.097,
+    "mean": 1.87,
+    "p50": 0.333,
+    "p90": 1.911,
+    "p99": 36.351,
+    "p999": 60.927,
+    "max": 89.167
+  },
+  "over_budget": {
+    "threshold_ms": 250,
+    "count": 0,
+    "percent": 0
+  },
+  "status_counts": {
+    "200": 300000
+  },
+  "histogram": [
+    {
+      "le": "\u003C= 1 ms",
+      "count": 236965
+    },
+    {
+      "le": "\u003C= 2 ms",
+      "count": 34621
+    },
+    {
+      "le": "\u003C= 5 ms",
+      "count": 11111
+    },
+    {
+      "le": "\u003C= 10 ms",
+      "count": 3206
+    },
+    {
+      "le": "\u003C= 25 ms",
+      "count": 8006
+    },
+    {
+      "le": "\u003C= 50 ms",
+      "count": 5006
+    },
+    {
+      "le": "\u003C= 100 ms",
+      "count": 1085
+    },
+    {
+      "le": "\u003C= 150 ms",
+      "count": 0
+    },
+    {
+      "le": "\u003C= 200 ms",
+      "count": 0
+    },
+    {
+      "le": "\u003C= 250 ms",
+      "count": 0
+    },
+    {
+      "le": "\u003C= 500 ms",
+      "count": 0
+    },
+    {
+      "le": "\u003C= 1000 ms",
+      "count": 0
+    },
+    {
+      "le": "\u003E 1000 ms",
+      "count": 0
+    }
+  ],
+  "threshold_failures": [],
+  "slow_requests": [],
+  "environment": {
+    "os": "Microsoft Windows 10.0.26300",
+    "architecture": "X64",
+    "runtime": ".NET 10.0.14",
+    "processor_count": 8
+  }
+}

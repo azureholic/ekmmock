@@ -43,6 +43,16 @@ internal static class EkmServerServiceCollectionExtensions
             options.TimestampFormat = "yyyy-MM-dd'T'HH:mm:ss.fff'Z' ";
         });
 
+        // M8 (benchmark, DECISIONS "M8: Benchmark"): the console logger's default queue-full mode is Wait, which makes the request thread block when stdout cannot keep up. With one Information line per
+        // request that capped the whole server at the speed of stdout (about 2,400 requests/s with stdout redirected to a file on Windows, against 33,000 without the line), and a stalled log consumer
+        // (a stuck container log driver) would have stalled every EKM request until Managed HSM timed out. A request must never wait for a log line: when the (large) queue is full the line is dropped.
+        // The metrics (spec 9) stay exact; the inspector has its own bounded, counted pipeline.
+        builder.Services.Configure<Microsoft.Extensions.Logging.Console.ConsoleLoggerOptions>(static options =>
+        {
+            options.QueueFullMode = Microsoft.Extensions.Logging.Console.ConsoleLoggerQueueFullMode.DropWrite;
+            options.MaxQueueLength = 16_384;
+        });
+
         builder.Services.AddEkmMockServices();
         return builder;
     }

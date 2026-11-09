@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>EkmMock.Cli</RootNamespace>
+    <!-- The command is called "ekmmock" (spec 12); the assembly name is the command name so that "dotnet ekmmock.dll" and the apphost agree. -->
+    <AssemblyName>ekmmock</AssemblyName>
+    <Version>0.2.0</Version>
+    <Description>ekmmock: command line tool of the EkmMock software HSM (test PKI, key and trust management, conformance suite, load test).</Description>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>ekmmock</ToolCommandName>
+    <PackageId>EkmMock.Cli</PackageId>
+    <IsPackable>true</IsPackable>
+    <!-- All own JSON is source generated; nothing in the CLI needs reflection serialization. -->
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" />
+    <PackageReference Include="Azure.Identity" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Justified references (DECISIONS "M8: CLI structure"): Pki is the test-PKI generator behind "ekmmock certs" and the console's own certificate generation;
+         Crypto supplies the shared name rules (key and namespace names) and the master key size. Nothing from the ASP.NET Core server. -->
+    <ProjectReference Include="..\EkmMock.Crypto\EkmMock.Crypto.csproj" />
+    <ProjectReference Include="..\EkmMock.Pki\EkmMock.Pki.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="EkmMock.Cli.Tests" />
+    <InternalsVisibleTo Include="EkmMock.Server.Tests" />
+  </ItemGroup>
+
+</Project>

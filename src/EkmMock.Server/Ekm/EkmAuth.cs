@@ -83,10 +83,13 @@ internal sealed class MtlsCallerAuthorizer : IEkmCallerAuthorizer
 {
     private const string ClientAuthOid = "1.3.6.1.5.5.7.3.2";
     private const int MaxCommonNameLogLength = 128;
+    private const int MaxCachedVerdicts = 1024;
 
     private readonly ClientTrustProvider _trust;
     private readonly ConnectionRegistry _connections;
     private readonly TimeProvider _time;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<ChainCacheKey, CachedChainVerdict> _verified = new();
+    private long _chainBuilds;
 
     public MtlsCallerAuthorizer(ClientTrustProvider trust, ConnectionRegistry connections, TimeProvider time)
     {
@@ -126,7 +129,7 @@ internal sealed class MtlsCallerAuthorizer : IEkmCallerAuthorizer
         }
 
         var now = _time.GetUtcNow();
-        var (chainOk, chainStatus, chainFlags) = BuildChain(certificate, namespaceTrust, now, context.Connection.Id);
+        var (chainOk, chainStatus, chainFlags) = VerifyChain(certificate, summary.ThumbprintSha256, ns.Name, namespaceTrust, now, context.Connection.Id);
         if (!chainOk)
         {
             var failure = ClassifyChainFailure(certificate, chainFlags, now);
@@ -153,8 +156,60 @@ internal sealed class MtlsCallerAuthorizer : IEkmCallerAuthorizer
         };
     }
 
-    private (bool Ok, string Status, X509ChainStatusFlags Flags) BuildChain(X509Certificate2 certificate, NamespaceTrust trust, DateTimeOffset now, string connectionId)
+    /// <summary>
+    /// Builds the chain of the certificate against this namespace's roots, <b>remembering successful verdicts</b>. Measured in M8 (benchmark): building an <c>X509Chain</c> with a custom trust store
+    /// took 12 ms per request on Windows and was 99 % of the server time of an <c>info</c> call, so p99 for a wrap/unwrap was about 100 ms instead of a few ms. Managed HSM reuses its connections and presents
+    /// the same certificate on every request, so the verdict is cached per (certificate thumbprint, namespace, presented intermediates).
+    /// <para>The cache cannot make a request pass that a fresh build would refuse: an entry belongs to the exact <see cref="NamespaceTrust"/> instance it was verified against (any change of trust, a CA added or
+    /// removed, publishes new instances, so every entry is dead at once), it is only used while <c>now</c> is inside the validity window of the leaf <em>and every chain element</em> (expiry is still judged per
+    /// request, to the second), and only successes are stored (failures are rebuilt every time, so a client that fixes its certificate or intermediates is accepted at once). The common name check and
+    /// everything else in <see cref="Authorize"/> still run on every request.</para>
+    /// </summary>
+    private (bool Ok, string Status, X509ChainStatusFlags Flags) VerifyChain(X509Certificate2 certificate, string thumbprint, string namespaceName, NamespaceTrust trust, DateTimeOffset now, string connectionId)
     {
+        var intermediates = _connections.TryGet(connectionId)?.PresentedIntermediates ?? [];
+        var key = new ChainCacheKey(thumbprint, namespaceName, IntermediatesKey(intermediates));
+        if (_verified.TryGetValue(key, out var cached) && ReferenceEquals(cached.Trust, trust) && now >= cached.ValidFrom && now < cached.ValidUntil)
+        {
+            return (true, nameof(X509ChainStatusFlags.NoError), X509ChainStatusFlags.NoError);
+        }
+
+        var (ok, status, flags, from, until) = BuildChain(certificate, trust, intermediates, now);
+        if (ok)
+        {
+            if (_verified.Count >= MaxCachedVerdicts)
+            {
+                _verified.Clear(); // a client population this large is not a Managed HSM pool; start over rather than grow
+            }
+
+            _verified[key] = new CachedChainVerdict(trust, from, until);
+        }
+
+        return (ok, status, flags);
+    }
+
+    /// <summary>How many chains were actually built (cache misses). Tests and diagnostics.</summary>
+    internal long ChainBuilds => Interlocked.Read(ref _chainBuilds);
+
+    private static string IntermediatesKey(IReadOnlyList<byte[]> intermediates)
+    {
+        if (intermediates.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
+        foreach (var der in intermediates)
+        {
+            hash.AppendData(der);
+        }
+
+        return Convert.ToHexString(hash.GetHashAndReset());
+    }
+
+    private (bool Ok, string Status, X509ChainStatusFlags Flags, DateTimeOffset ValidFrom, DateTimeOffset ValidUntil) BuildChain(X509Certificate2 certificate, NamespaceTrust trust, IReadOnlyList<byte[]> intermediates, DateTimeOffset now)
+    {
+        Interlocked.Increment(ref _chainBuilds);
         using var chain = new X509Chain();
         var policy = chain.ChainPolicy;
         policy.TrustMode = X509ChainTrustMode.CustomRootTrust;
@@ -163,15 +218,32 @@ internal sealed class MtlsCallerAuthorizer : IEkmCallerAuthorizer
         policy.DisableCertificateDownloads = true;
         policy.VerificationTime = now.LocalDateTime;
         policy.ApplicationPolicy.Add(new System.Security.Cryptography.Oid(ClientAuthOid));
-        foreach (var der in _connections.TryGet(connectionId)?.PresentedIntermediates ?? [])
+        foreach (var der in intermediates)
         {
             policy.ExtraStore.Add(X509CertificateLoader.LoadCertificate(der));
         }
 
         var ok = chain.Build(certificate);
         var flags = chain.ChainStatus.Aggregate(X509ChainStatusFlags.NoError, static (all, s) => all | s.Status);
-        return (ok, ClientCertificateValidator.DescribeStatus(chain), flags);
+        var validFrom = DateTimeOffset.MinValue;
+        var validUntil = DateTimeOffset.MaxValue;
+        if (ok)
+        {
+            foreach (var element in chain.ChainElements)
+            {
+                var notBefore = new DateTimeOffset(element.Certificate.NotBefore.ToUniversalTime(), TimeSpan.Zero);
+                var notAfter = new DateTimeOffset(element.Certificate.NotAfter.ToUniversalTime(), TimeSpan.Zero);
+                validFrom = notBefore > validFrom ? notBefore : validFrom;
+                validUntil = notAfter < validUntil ? notAfter : validUntil;
+            }
+        }
+
+        return (ok, ClientCertificateValidator.DescribeStatus(chain), flags, validFrom, validUntil);
     }
+
+    private readonly record struct ChainCacheKey(string Thumbprint, string Namespace, string Intermediates);
+
+    private sealed record CachedChainVerdict(NamespaceTrust Trust, DateTimeOffset ValidFrom, DateTimeOffset ValidUntil);
 
     private static AuthFailure ClassifyChainFailure(X509Certificate2 certificate, X509ChainStatusFlags flags, DateTimeOffset now)
     {

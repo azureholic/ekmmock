@@ -960,6 +960,101 @@ the `/api/console/faults` endpoints, and small changes in the dispatcher, handle
 - **Flake runs** (full solution, Windows, consecutive): three series of five on the code as it evolved, then one final run. Failures seen and what they were: a stale-record match and a 1 s blackhole hold cap that was too short under load (both test-side, fixed: the fixture cap is 4 s and the match requires `ClosedByServer`); a 170 ms delay that ran past 250 ms under load (the end-to-end level tests now use delays far from a boundary; the boundaries are pinned by `LevelFor`);
   a blackhole test that used a 600 ms client timeout, which on a loaded machine could expire before the request reached the blackhole stage (the test now waits until the rule has fired, then aborts the client); delay lower bounds with 2 to 10 ms of margin (Linux `Task.Delay` fired 6 ms early; loosened); a pre-existing M5 bUnit race in `LiveTrafficTests.Pause_...` (resume re-renders asynchronously; the test now waits); and the open-question-47 handshake flake   (3 of 21 runs;
     see OPEN-QUESTIONS 47). On Linux the full container run once showed three load-related failures (two of them fixed as above, a `HostCompositionTests.ADisposedBackend...` first request that did not return 200 once and did not recur in two further container runs, cause not found); the last full container run was green.
+
+## M8: `ekmmock` CLI, conformance suite, bench
+
+### Structure and references
+- `src/EkmMock.Cli` (assembly and tool command `ekmmock`, `PackAsTool`, version 0.2.0), `tests/EkmMock.Cli.Tests`. **References**: `EkmMock.Pki` (certificate generation for `certs`) and `EkmMock.Crypto` (master key size and key-name rules for `init`). It does **not** reference `EkmMock.Server`; the console API DTOs are small duplicated records with source-generated JSON (`ConsoleApiModels`, `OutputModels`).
+  Packages (pinned in `Directory.Packages.props`): `System.CommandLine` 2.0.14 and `Azure.Identity` 1.21.0 (device-code sign-in only). No other third-party dependency; JSON uses source generation.
+- Commands: `init`, `certs ca|server|client|dev`, `key list|show|create|enable|disable|expire|destroy`, `trust import`, `ns list|create|delete`, `faults list|preset|delete|clear` (the last two groups were trivial, so they are included), `test conformance|bench`. Every command has `--help` with examples; `--version`; `--verbose` shows exception details (never secrets), otherwise no stack traces.
+- **Exit codes** (printed in every `--help`): `0` success, `1` failure (action refused by the server, a conformance test or bench threshold failed), `2` usage error (bad command line), `3` connection or authentication error (TLS failure, 401/403 from the console, nothing listening, preflight failure).
+- Output: tables by default, `--json` / `-o json` for scripting. Secret material is never printed: the API does not return it; `init` prints a master key only with an explicit `--print`; private keys are written to files, never to stdout.
+- System.CommandLine 2.0.14 quirks handled: help is wrapped (the help builder is not public) so long descriptions print their details after the standard help; validators run before defaults (the code uses `TryGiven`/`IsGiven`, never `GetValue` in validators); `--help` and `--version` win over parse errors.
+
+### `init`, `certs`
+- `init --data <dir>` creates `<dir>`, `tls/`, `inspector/`, writes `master.key` (32 random bytes, base64) with **owner-only permissions** (Unix mode 600 at creation; on Windows a `FileSecurity` ACL for the current user only, set at creation so the key is never readable by others even for a moment; a partial file is deleted on failure) and prints the `EKMMOCK_MASTER_KEY_FILE` instructions.
+  It refuses to overwrite an existing `master.key`; with `keystore.json` present and no master key it refuses too (a new key could never open that store); `--force` replaces a master key only when **no** `keystore.json` exists. Re-running `init` on a complete folder changes nothing and says so (idempotent).
+- `certs` is **test PKI only** and says so loudly. `ca` writes the root CA certificate and key, `server` a leaf with the FQDN as SAN (extra SANs, validity options), `client` a leaf with the clientAuth EKU and the given CN, `dev` a CA + server certificate + a fake Managed HSM client CA + client certificate in one go (spec 11.2) and `root-ca.pem` for `--server-ca-certificate`. Keys are written owner-only and never printed.
+  Generated CA subject names carry a random 8-hex tag so that two generated CAs never collide in the Windows certificate store (open question 25).
+
+### Console access from the CLI
+- `--console` (default `https://127.0.0.1:8080`, env `EKMMOCK_CONSOLE`). **Trusting the console's certificate**, in order of preference: `--console-ca <pem>` (the only roots trusted), `--console-pin <sha256>` (pin of the console certificate, no chain needed), `--insecure-console-cert` (accepted **only for a loopback host**, with a warning; there is no blanket bypass for other hosts).
+- **LoopbackOnly**: every request carries `X-EkmMock-Client: ekmmock-cli` and never an `Origin` header (the M6 CSRF-safe mechanism for non-browser clients).
+- **EntraId** (answer to open question 38): the console API accepts a **bearer token on `/api/console/*` only**. Server side: `ConsoleAuth.AddEntra` registers a policy scheme that forwards to the JWT bearer scheme (`AddMicrosoftIdentityWebApi`) only when the path is `/api/console/*` **and** an `Authorization: Bearer` header is present; everything else (Blazor pages, `/_blazor`, the EKM port) keeps OIDC + cookie
+  and ignores bearer tokens (tests prove a valid token is rejected there). The same allowed-object-id / group policy as the UI applies. `ConsoleMutationFilter` treats a bearer-authenticated request as the non-browser proof (no antiforgery token, no header needed). Identity.Web requires an `scp` or `roles` claim in the token, so the app registration must expose an API scope; the CLI's default scope is `api://<client-id>/.default`.
+  CLI side: `--auth entra --tenant <id> --client-id <id> [--scope <scope>]` uses `DeviceCodeCredential` (prints the code and URL to stderr, token cached **in memory only**, no disk cache and no flag for one); `EKMMOCK_CONSOLE_TOKEN` supplies a ready token instead. **Verified only with locally signed JWTs and a fake credential, not against a real tenant** (open question 38).
+- Conventions for scripts: `key destroy` needs `--confirm <name>` (the name again; no prompt), `key expire --at <ISO-8601>|--clear`, `key create --ns --name --type aes|rsa --size N` (RSA prints `n`/`e` and the `az keyvault key create --hsm-name <hsm> --name <ref> --external-key-id <key>` command), `trust import --ns --json mhsm-client.json [--dry-run]` (prints the preview and warnings such as a non-root CA; `--pem` for a PEM file).
+- **New server endpoint `POST /api/console/keys/import`** (needed by the conformance suite for RFC vectors): as gated as the UI import, i.e. `403` unless `EKMMOCK_ALLOW_KEY_IMPORT` is on; the material is decoded with the same code as the UI, zeroed after use, never echoed and never audited. The M6 test that said "no import endpoint" now asserts 403 without the switch.
+
+### Conformance suite (`ekmmock test conformance`)
+Acts as the fake Managed HSM: mTLS, TLS 1.3, `--client-cert/--client-key`, `--ca` the **only** trusted root (no insecure mode). 49 checks with ids `14.<test>.<letter>` that cover all 27 tests of spec 14; prints `PASS`/`FAIL`/`SKIP` per check with the id and name, a summary and writes `--report` (default `conformance-report.json`: tool version, time, target, environment, per check id/name/status/duration/message; no secrets, no key material).
+Exit `0` only if no check failed (a run where everything was skipped exits 0 with a "no test passed" note; a failing preflight `info` exits 3). After a run without failures it prints the `az` commands of spec 15 with FQDN, prefix and key names filled in. `--list` prints the catalog, `--only <id,...>` selects checks.
+- All data is synthetic. Temporary keys are named `conf-<run id>-*`, created through the console API (`--console`), and destroyed at the end; anything that could not be destroyed is listed in the report. An independent RFC 3394 / RFC 5649 implementation in the CLI (`ReferenceKeyWrap`) checks the server's AES-KW/KWP output against an imported KEK.
+- Inputs that avoid skips: `--console` (+ `--console-ca`) for key management, destroyed/disabled/expired keys, inspector/audit/fault checks and the port checks; `--alt-client-cert/--alt-client-key` (trusted CA, wrong CN), `--rogue-client-cert/--rogue-client-key` (untrusted CA), `--namespace` (a second namespace is created through the console for the other-prefix checks),
+  `--replacement-server-cert/--replacement-server-key` for the hot-reload test (it **leaves the replacement served**), the server started with `EKMMOCK_ENABLE_FAULTS=true` (HSM-offline, 429/503 and delay checks) and `EKMMOCK_ALLOW_KEY_IMPORT=true` (RFC vectors), `--allow-disruptive` for the concurrency-limit test (it holds every slot with blackholed requests), `--persistence-state <file>` for the two-phase restart test.
+  Without `--console`, `--aes-key`/`--rsa-key` name existing keys for the round-trip checks.
+- **Mapping of spec 14 to checks and what can be skipped**:
+
+| Spec 14 test | Checks | SKIP when |
+|---|---|---|
+| 1 info | 14.1.a, 14.1.b | 14.1.b without `--console` or with faults disabled on the server |
+| 2 api-version | 14.2.a, b | never |
+| 3 key names | 14.3.a, b | never |
+| 4 not found | 14.4.a, b, c | b, c: no `--console` |
+| 5 metadata | 14.5.a, b | b: no RSA key (needs `--console` or `--rsa-key`) |
+| 6 round trips and sizes | 14.6.a-f | without `--console` they use the keys named by `--aes-key`/`--rsa-key` |
+| 7 RFC vectors | 14.7.a, b | server has key import disabled |
+| 8 RSA interop | 14.8.a, b | b: key import disabled (client needs the private half) |
+| 9 mismatch | 14.9.a | never |
+| 10 tamper | 14.10.a | never |
+| 11 disabled/expired | 14.11.a, b | no `--console` |
+| 12 base64url | 14.12.a, b, c | never |
+| 13 persistence | 14.13.a | **always in a one-shot run**: needs two runs around a restart (`--persistence-state`) |
+| 14 TLS / auth | 14.14.a-e | c: no `--alt-client-*`; d: no `--rogue-client-*`; e: no `--console` (the second namespace is created through it) |
+| 15 hot reload | 14.15.a | no `--replacement-server-*` or no `--console` |
+| 16 port separation | 14.16.a, b | no `--console` |
+| 17 LoopbackOnly refuses non-loopback | 14.17.a | **always**: needs to start a server (covered by the server tests) |
+| 18 no secrets | 14.18.a | no `--console` |
+| 19 keystore at rest | 14.19.a | **always**: needs the data folder (covered by the server tests) |
+| 20-23 inspector | 14.20.a, b, 14.21.a, 14.22.a, 14.23.a | no `--console`; 14.20.b also needs faults |
+| 24 inspector overhead | 14.24.a | **always**: in-process measurement (M4 benchmark test) |
+| 25 benchmark | 14.25.a | **always** in the suite: it takes 60 s; use `ekmmock test bench` (below) |
+| 26 delay | 14.26.a | no `--console`, or faults disabled on the server |
+| 27 429 | 14.27.a | no `--console`, no `--allow-disruptive`, or faults disabled |
+
+  The local end-to-end test supplies every optional input and ends with **49 checks: 44 PASS, 0 FAIL, 5 SKIP** (14.13.a, 14.17.a, 14.19.a, 14.24.a, 14.25.a: the ones that cannot be observed from outside in one run). 14.13.a is covered by a separate two-phase test (`PersistenceRestartTests`) that runs the suite, restarts the real server and runs it again.
+  The suite can fail: negative tests point it at a server with the HSM-offline fault and at a stub that answers wrongly, and assert exit 1 and the failing checks.
+
+### Bench (`ekmmock test bench`)
+- Closed loop by default: N workers (default 16), each with its own kept-alive HTTP/1.1 connection, sending the next request when the last was answered; 5 s warm-up (discarded), then the measured duration. `unwrapkey` wraps once first with a synthetic DEK. One **preflight** request before the load, so a TLS or trust problem exits 3 instead of producing a run of identical errors.
+  `--rate <req/s>` switches to an **open loop** (requests scheduled at a fixed rate, latency measured from the scheduled start, which corrects coordinated omission); the closed loop is documented as *not* correcting it. On Windows the open loop requests a 1 ms timer resolution for the run, and never sends before the scheduled start.
+- Statistics: `Stopwatch` timestamps, an allocation-free log-linear histogram (8 sub-bucket bits, at most 0.8 % error; the old per-sample list allocated per request), p50/p90/p99/p99.9/max, req/s, errors by status code (and `exception:<type>`), the share over 250 ms, a bucket histogram, the first slow requests with their offset (tells a periodic stall from noise). `--json`/`--report` for the result; exit 1 on `--assert-p99-ms`, `--max-over-250-pct`, `--assert-no-errors`.
+  The DEK is never logged; requests show up in the console like any other traffic.
+
+### Benchmark (spec 14 test 25) - measured
+Raw files and machine in `docs/benchmarks/` (README there). Release build, `--dev`, loopback, 8 logical CPUs (i7-9700K), **client and server on the same shared machine**, concurrency 16, 60 s:
+
+| Operation | req/s | p50 | p99 | max | > 250 ms | Target p99 |
+|---|---:|---:|---:|---:|---:|---|
+| AES `unwrapkey` A256KWP | 30,221 | 0.41 ms | 1.56 ms | 327 ms | 16 of 1.8 M | < 10 ms: **met** |
+| RSA-2048 `unwrapkey` | 9,367 | 1.45 ms | 4.32 ms | 340 ms | 16 of 562 k | < 30 ms: **met** |
+| RSA-4096 `unwrapkey` | 1,894 | 8.19 ms | 18.7 ms | 171 ms | 0 | < 100 ms: **met** |
+| `info` | 32,625 | 0.37 ms | 1.62 ms | 315 ms | 16 of 2.0 M | < 5 ms: **met** |
+
+- **The "0 % over 250 ms" target is not met strictly**: 0.001-0.003 % of the requests (16 per run, all at once) are one ~100-340 ms stall roughly every 10 s at 30k req/s. Open loop at 1,000 req/s: AES p99 5.5 ms, nothing over 250 ms; at 5,000 req/s: p99 36 ms (stall-aware), nothing over 250 ms. Root cause not isolated (see the benchmarks README and open question 55).
+- **Two real server inefficiencies were found and fixed by this measurement** (first run: 331 req/s, p50 47 ms, p99 101 ms): (1) `MtlsCallerAuthorizer` built an `X509Chain` for every request (12 ms on Windows, 99 % of the time of an `info`): successful verdicts are now cached per (certificate thumbprint, namespace, presented intermediates). The cache entry is tied to the exact `NamespaceTrust` instance (any trust change publishes new instances and kills every entry),
+  is only used while `now` is inside the validity window of the leaf and of **every chain element** (expiry is still judged per request), and only successes are stored (a client that fixes its certificate is accepted at once). Common name checks and everything else still run per request. Tests: `MtlsChainVerdictCacheTests` (one build for repeated calls, failures not cached, trust change invalidates, expiry, namespaces separate, CN list still enforced).
+  (2) The console logger's default queue mode (`Wait`) made request threads wait for stdout (about 0.4 ms per line, serialised): now `QueueFullMode=DropWrite` with `MaxQueueLength=16384`, so under extreme overload **log lines can be dropped** instead of slowing requests (open question 54). Result: 331 to about 30,000 req/s and p99 from 101 ms to 1.5 ms.
+- `ServerGarbageCollector=true` and `ConcurrentGarbageCollection=true` are set in `EkmMock.Server.csproj` (spec 11.1).
+
+### M8: Tests and results
+- **Totals** (Windows, `dotnet test EkmMock.sln`, final code): 2030 tests, 2026 passed, 0 failed, 4 skipped (the four `CipherPolicyTests.Linux_*` tests, which need OpenSSL). Per project: Server 1177 (1173 + 4 skipped), Cli 247, Console and Crypto the rest. **Linux** (`tests/run-server-tests-linux.ps1`, container, Server project): 1177 tests, 0 failed, 4 skipped (the four Windows-only `WindowsKeyContainerTests`), so the cipher tests, the bearer tests and the chain-cache tests ran there.
+- **Flake runs**: five consecutive runs of the Server project (1177) and the CLI project (247) on the final code: all 10 runs green, no flake seen (the known open-question-47 flake did not occur). `dotnet list package --vulnerable --include-transitive` is clean for all projects.
+- New: `EkmMock.Cli.Tests` (247 tests: parsing/help, `init`, `certs` (SAN, EKU, chain built and verified, keys never printed), formatters, exit codes, `--confirm`, device-code with a fake credential, console client against stubs, histogram and bench statistics, reference key wrap, catalog, and **real-server integration**: `key` and `trust` commands against `/api/console/*`, the full conformance run, the persistence restart, a bench run, the leak scan and the negative tests),
+  and in `EkmMock.Server.Tests` `ConsoleBearerTests` (fake JWT validation: policy, 401/403, bearer rejected on pages, `/_blazor` and the EKM port), `AdminApiImportTests`, `CliBearerEndToEndTests` (the CLI against an in-process EntraId console) and `MtlsChainVerdictCacheTests`.
+- **Leak scan**: stdout, stderr and the JSON report of a full run (and the bench output) are scanned for every DEK, AES key, RSA private parameter and the master key as raw text, base64, base64url and hex.
+- Linux: the CLI project is built by `tests/run-server-tests-linux.ps1` (the Server tests reference it); the CLI tests themselves spawn the built server and are run on Windows only.
+
 - **CNG key files** (`%APPDATA%\Microsoft\Crypto\Keys`): +113 per full solution run on the M6 code (baseline copy), **+9 per full run now** (+11/+12 in the runs that had failures), Server.Tests alone +2.
 
 ### M7: Not covered / deliberately skipped

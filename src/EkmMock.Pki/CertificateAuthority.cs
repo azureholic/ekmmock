@@ -93,6 +93,9 @@ public sealed class CertificateAuthority : IDisposable
 
     public string CertificatePem => _identity.CertificatePem;
 
+    /// <summary>The CA's private key as PKCS#8 PEM. Only the <c>ekmmock certs</c> command writes it (to a file only its owner can read); treat it as a secret.</summary>
+    public string PrivateKeyPem => _identity.PrivateKeyPem;
+
     public byte[] Der => _identity.Der;
 
     public string Subject => _identity.Certificate.Subject;
@@ -102,6 +105,83 @@ public sealed class CertificateAuthority : IDisposable
 
     /// <summary>PEM of the CAs above this one (empty for a root).</summary>
     public IReadOnlyList<string> IntermediatePems => _identity.IntermediatePems;
+
+    /// <summary>
+    /// Loads a CA that was written to disk earlier (<c>ekmmock certs ca</c>): the CA certificate and its PKCS#8 private key, both PEM. Throws <see cref="ArgumentException"/> (never echoing the
+    /// key) when the input is not a CA certificate, the key is not valid PEM or the key does not belong to the certificate. A self-signed certificate is treated as a root, anything else as
+    /// an intermediate whose own chain is unknown (certificates it issues then carry only this CA as their intermediate).
+    /// </summary>
+    public static CertificateAuthority Load(string certificatePem, string privateKeyPem)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(certificatePem);
+        ArgumentException.ThrowIfNullOrWhiteSpace(privateKeyPem);
+
+        X509Certificate2 certificate;
+        try
+        {
+            certificate = X509Certificate2.CreateFromPem(certificatePem);
+        }
+        catch (CryptographicException)
+        {
+            throw new ArgumentException("The CA certificate is not valid PEM.", nameof(certificatePem));
+        }
+
+        using (certificate)
+        {
+            if (certificate.Extensions.OfType<X509BasicConstraintsExtension>().FirstOrDefault() is not { CertificateAuthority: true })
+            {
+                throw new ArgumentException("The certificate is not a CA certificate (basicConstraints CA:true is missing).", nameof(certificatePem));
+            }
+
+            AsymmetricAlgorithm key;
+            PkiKeyAlgorithm algorithm;
+            using (var rsaPublic = certificate.GetRSAPublicKey())
+            using (var ecdsaPublic = certificate.GetECDsaPublicKey())
+            {
+                algorithm = rsaPublic is not null
+                    ? PkiKeyAlgorithm.Rsa2048
+                    : ecdsaPublic is not null
+                        ? PkiKeyAlgorithm.EcdsaP256
+                        : throw new ArgumentException("Only RSA and ECDSA CA certificates are supported.", nameof(certificatePem));
+            }
+
+            try
+            {
+                if (algorithm == PkiKeyAlgorithm.Rsa2048)
+                {
+                    var rsa = RSA.Create();
+                    rsa.ImportFromPem(privateKeyPem);
+                    key = rsa;
+                }
+                else
+                {
+                    var ecdsa = ECDsa.Create();
+                    ecdsa.ImportFromPem(privateKeyPem);
+                    key = ecdsa;
+                }
+            }
+            catch (Exception exception) when (exception is CryptographicException or ArgumentException)
+            {
+                throw new ArgumentException("The CA private key is not valid PKCS#8 PEM.", nameof(privateKeyPem));
+            }
+
+            using (key)
+            {
+                IssuedCertificate identity;
+                try
+                {
+                    identity = Materialize(certificate, key, [], persistKey: false);
+                }
+                catch (Exception exception) when (exception is CryptographicException or ArgumentException)
+                {
+                    throw new ArgumentException("The CA private key does not belong to the CA certificate.", nameof(privateKeyPem));
+                }
+
+                var isRoot = certificate.SubjectName.RawData.AsSpan().SequenceEqual(certificate.IssuerName.RawData);
+                return new CertificateAuthority(identity, algorithm, isRoot);
+            }
+        }
+    }
 
     /// <summary>Creates a self-signed root CA (pathLenConstraint 2).</summary>
     /// <param name="commonName">Becomes <c>CN=</c> of the subject.</param>

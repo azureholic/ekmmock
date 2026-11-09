@@ -251,10 +251,10 @@ public sealed class AdminApiKeysTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Import_IsNotAvailableThroughTheApi_AndTheEngineStaysGatedWithoutTheFlag()
+    public async Task Import_IsRefusedByTheApi_AndTheEngineStaysGatedWithoutTheFlag()
     {
-        // The REST API has no import endpoint at all (import is a UI-only, gated test feature), and the engine refuses it without EKMMOCK_ALLOW_KEY_IMPORT.
-        (await _api.PostAsync("/api/console/keys/import", new { })).StatusCode.ShouldBe(404);
+        // M8 added POST /api/console/keys/import for the CLI conformance suite (RFC vectors); it is as gated as the UI: without EKMMOCK_ALLOW_KEY_IMPORT it answers 403 (see AdminApiImportTests for the enabled case).
+        (await _api.PostAsync("/api/console/keys/import", new { })).StatusCode.ShouldBe(403);
         var keys = _host.Host.App.Services.GetRequiredService<KeyAdminService>();
         keys.ImportEnabled.ShouldBeFalse();
         var exception = Should.Throw<ConsoleActionException>(() => keys.Import("loopback", "_default", Unique("imp"), KeyType.Oct, Fx.Random(32)));

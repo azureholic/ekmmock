@@ -10,6 +10,9 @@ namespace EkmMock.Server.WebConsole;
 // ---- request bodies (snake_case on the wire) ----
 internal sealed record CreateKeyBody(string? Namespace, string? Name, string? Type, int Size, bool AllowReuseOfDestroyedName);
 
+/// <summary>Key import for test vectors (gated by <c>EKMMOCK_ALLOW_KEY_IMPORT</c>). <c>Material</c> is hex or base64url for AES, PEM or base64 PKCS#8 for RSA; it is never echoed, logged or audited.</summary>
+internal sealed record ImportKeyBody(string? Namespace, string? Name, string? Type, string? Material, bool AllowReuseOfDestroyedName);
+
 internal sealed record ExpiryBody(DateTimeOffset? NotAfter);
 
 internal sealed record DestroyKeyBody(string? ConfirmName);
@@ -56,6 +59,7 @@ internal sealed record NamespaceDeleted(bool Deleted, int DestroyedKeys);
     UseStringEnumConverter = true,
     WriteIndented = false)]
 [JsonSerializable(typeof(CreateKeyBody))]
+[JsonSerializable(typeof(ImportKeyBody))]
 [JsonSerializable(typeof(ExpiryBody))]
 [JsonSerializable(typeof(DestroyKeyBody))]
 [JsonSerializable(typeof(NamespaceBody))]
@@ -92,7 +96,9 @@ internal sealed partial class ConsoleAdminJsonContext : JsonSerializerContext
 /// <item>The CLI way (no cookie jar needed): the custom header <c>X-EkmMock-Client</c> with any non-empty value, sent <b>without an <c>Origin</c> header</b> and not as a cross-site
 /// fetch. A web page cannot send a custom header cross-origin without a CORS preflight, which this server never grants (no CORS), and a browser always adds <c>Origin</c> to
 /// a cross-origin POST; so this proof cannot be produced by a hostile page. It is the standard "custom request header" CSRF defence and does not weaken the browser path:
-/// a request that carries an <c>Origin</c> header must use the antiforgery token. In <c>EntraId</c> mode the call must still carry the sign-in (cookie today; the CLI's device-code token in M8).</item>
+/// a request that carries an <c>Origin</c> header must use the antiforgery token. In <c>EntraId</c> mode the call must still carry the sign-in: the cookie in a browser, or a
+/// validated bearer token from the CLI's device-code sign-in (<see cref="ConsoleBearer"/>). A request authenticated by a bearer token needs neither proof: it has no ambient credential
+/// a hostile page could ride on.</item>
 /// </list>
 /// </summary>
 internal sealed class ConsoleMutationFilter : IEndpointFilter
@@ -102,7 +108,7 @@ internal sealed class ConsoleMutationFilter : IEndpointFilter
     public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
     {
         var http = context.HttpContext;
-        if (!IsScriptedClient(http.Request))
+        if (!ConsoleBearer.IsBearerAuthenticated(http) && !IsScriptedClient(http.Request))
         {
             var antiforgery = http.RequestServices.GetRequiredService<IAntiforgery>();
             try
@@ -142,6 +148,43 @@ internal static class ConsoleAdminApi
         {
             var created = keys.Create(await Actor(user), new CreateKeyRequest(body.Namespace ?? string.Empty, body.Name ?? string.Empty, body.Type ?? string.Empty, body.Size, body.AllowReuseOfDestroyedName));
             return Results.Json(created, ConsoleAdminJsonContext.Default.KeyView, statusCode: StatusCodes.Status201Created);
+        })).AddEndpointFilter<ConsoleMutationFilter>();
+
+        // Test-vector import (the CLI's conformance run uses it for the RFC 3394 vector and for an RSA key whose private half the client holds). Same gate as the Keys page:
+        // without EKMMOCK_ALLOW_KEY_IMPORT=true it answers 403 and nothing is read from the body. The material is zeroed after the call and never leaves in a response.
+        api.MapPost("/keys/import", (HttpContext http, KeyAdminService keys, IConsoleUser user) => RunBody(http, ConsoleAdminJsonContext.Default.ImportKeyBody, async body =>
+        {
+            if (!keys.ImportEnabled)
+            {
+                return Error(StatusCodes.Status403Forbidden, nameof(ConsoleErrorCode.Forbidden), "Key import is switched off. Start the process with EKMMOCK_ALLOW_KEY_IMPORT=true to import test vectors.");
+            }
+
+            var type = body.Type?.ToLowerInvariant() switch
+            {
+                "oct" or "aes" => (EkmMock.Crypto.KeyType?)EkmMock.Crypto.KeyType.Oct,
+                "rsa" => EkmMock.Crypto.KeyType.Rsa,
+                _ => null,
+            };
+            if (type is null)
+            {
+                return Error(StatusCodes.Status400BadRequest, nameof(ConsoleErrorCode.InvalidRequest), "The key type must be 'oct' (AES-256) or 'RSA'.");
+            }
+
+            var material = KeyMaterialInput.TryDecode(type.Value, body.Material);
+            if (material is null)
+            {
+                return Error(StatusCodes.Status400BadRequest, nameof(ConsoleErrorCode.InvalidRequest), "The key material is not valid for this key type.");
+            }
+
+            try
+            {
+                var imported = keys.Import(await Actor(user), body.Namespace ?? string.Empty, body.Name ?? string.Empty, type.Value, material, body.AllowReuseOfDestroyedName);
+                return Results.Json(imported, ConsoleAdminJsonContext.Default.KeyView, statusCode: StatusCodes.Status201Created);
+            }
+            finally
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(material);
+            }
         })).AddEndpointFilter<ConsoleMutationFilter>();
 
         api.MapPost("/keys/{ns}/{name}/enable", (string ns, string name, KeyAdminService keys, IConsoleUser user)

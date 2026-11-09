@@ -20,6 +20,9 @@
     <!-- Console tests (M5): component tests and the real-browser smoke test. -->
     <PackageVersion Include="bunit" Version="2.13.3" />
     <PackageVersion Include="Microsoft.Playwright" Version="1.64.1" />
+    <!-- CLI (M8). System.CommandLine 2.0 is the stable release line; Azure.Identity is used only for the optional Entra device-code sign-in (DeviceCodeCredential, in-memory token cache). -->
+    <PackageVersion Include="System.CommandLine" Version="2.0.14" />
+    <PackageVersion Include="Azure.Identity" Version="1.21.0" />
   </ItemGroup>
 
 </Project>

@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>EkmMock.Cli.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <OutputType>Exe</OutputType>
+    <!-- Like the server tests: the HTTP clients in these tests have bounded timeouts and do not need per-call cancellation tokens. -->
+    <NoWarn>$(NoWarn);xUnit1051</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="Shouldly" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\EkmMock.Cli\EkmMock.Cli.csproj" />
+    <ProjectReference Include="..\..\src\EkmMock.Pki\EkmMock.Pki.csproj" />
+    <ProjectReference Include="..\EkmMock.TestSupport\EkmMock.TestSupport.csproj" />
+    <!-- The integration tests start the real server as a child process (the way a user does). The reference only makes sure it is built first; none of its types is used. -->
+    <ProjectReference Include="..\..\src\EkmMock.Server\EkmMock.Server.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+    <Using Include="Shouldly" />
+  </ItemGroup>
+
+</Project>

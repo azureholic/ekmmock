@@ -1,0 +1,352 @@
+{
+  "tool": "ekmmock test bench",
+  "version": "0.2.0",
+  "started_at_utc": "2026-11-09T20:55:25.5173517+00:00",
+  "target": "https://127.0.0.1:28443",
+  "operation": "unwrapkey",
+  "key": "rsa-key-1",
+  "algorithm": "RSA-OAEP-256",
+  "concurrency": 16,
+  "duration_seconds": 60,
+  "warmup_seconds": 5,
+  "model": "closed loop: each worker sends its next request when the previous one is answered (does not correct coordinated omission)",
+  "requests": 562028,
+  "errors": 0,
+  "throughput_rps": 9367,
+  "latency_ms": {
+    "min": 0.558,
+    "mean": 1.707,
+    "p50": 1.447,
+    "p90": 2.335,
+    "p99": 4.319,
+    "p999": 24.959,
+    "max": 339.725
+  },
+  "over_budget": {
+    "threshold_ms": 250,
+    "count": 16,
+    "percent": 0.0028
+  },
+  "status_counts": {
+    "200": 562028
+  },
+  "histogram": [
+    {
+      "le": "\u003C= 1 ms",
+      "count": 14638
+    },
+    {
+      "le": "\u003C= 2 ms",
+      "count": 448158
+    },
+    {
+      "le": "\u003C= 5 ms",
+      "count": 95260
+    },
+    {
+      "le": "\u003C= 10 ms",
+      "count": 2093
+    },
+    {
+      "le": "\u003C= 25 ms",
+      "count": 1325
+    },
+    {
+      "le": "\u003C= 50 ms",
+      "count": 472
+    },
+    {
+      "le": "\u003C= 100 ms",
+      "count": 18
+    },
+    {
+      "le": "\u003C= 150 ms",
+      "count": 16
+    },
+    {
+      "le": "\u003C= 200 ms",
+      "count": 16
+    },
+    {
+      "le": "\u003C= 250 ms",
+      "count": 16
+    },
+    {
+      "le": "\u003C= 500 ms",
+      "count": 16
+    },
+    {
+      "le": "\u003C= 1000 ms",
+      "count": 0
+    },
+    {
+      "le": "\u003E 1000 ms",
+      "count": 0
+    }
+  ],
+  "threshold_failures": [],
+  "slow_requests": [
+    {
+      "offset_seconds": 8.329,
+      "latency_ms": 137.9
+    },
+    {
+      "offset_seconds": 8.329,
+      "latency_ms": 137.9
+    },
+    {
+      "offset_seconds": 8.329,
+      "latency_ms": 137.7
+    },
+    {
+      "offset_seconds": 8.329,
+      "latency_ms": 137.8
+    },
+    {
+      "offset_seconds": 8.329,
+      "latency_ms": 137.7
+    },
+    {
+      "offset_seconds": 8.33,
+      "latency_ms": 137
+    },
+    {
+      "offset_seconds": 8.33,
+      "latency_ms": 136.6
+    },
+    {
+      "offset_seconds": 8.33,
+      "latency_ms": 137.2
+    },
+    {
+      "offset_seconds": 8.33,
+      "latency_ms": 136.7
+    },
+    {
+      "offset_seconds": 8.33,
+      "latency_ms": 137.5
+    },
+    {
+      "offset_seconds": 8.33,
+      "latency_ms": 136.9
+    },
+    {
+      "offset_seconds": 8.33,
+      "latency_ms": 136.8
+    },
+    {
+      "offset_seconds": 8.33,
+      "latency_ms": 137
+    },
+    {
+      "offset_seconds": 8.33,
+      "latency_ms": 136.7
+    },
+    {
+      "offset_seconds": 8.331,
+      "latency_ms": 136.6
+    },
+    {
+      "offset_seconds": 8.331,
+      "latency_ms": 136.6
+    },
+    {
+      "offset_seconds": 18.538,
+      "latency_ms": 216.4
+    },
+    {
+      "offset_seconds": 18.538,
+      "latency_ms": 216.9
+    },
+    {
+      "offset_seconds": 18.538,
+      "latency_ms": 216
+    },
+    {
+      "offset_seconds": 18.538,
+      "latency_ms": 215.9
+    },
+    {
+      "offset_seconds": 18.538,
+      "latency_ms": 216.7
+    },
+    {
+      "offset_seconds": 18.538,
+      "latency_ms": 215.9
+    },
+    {
+      "offset_seconds": 18.538,
+      "latency_ms": 217
+    },
+    {
+      "offset_seconds": 18.538,
+      "latency_ms": 217
+    },
+    {
+      "offset_seconds": 18.538,
+      "latency_ms": 216.7
+    },
+    {
+      "offset_seconds": 18.538,
+      "latency_ms": 216.8
+    },
+    {
+      "offset_seconds": 18.538,
+      "latency_ms": 216.9
+    },
+    {
+      "offset_seconds": 18.538,
+      "latency_ms": 216.8
+    },
+    {
+      "offset_seconds": 18.538,
+      "latency_ms": 216.7
+    },
+    {
+      "offset_seconds": 18.538,
+      "latency_ms": 217
+    },
+    {
+      "offset_seconds": 18.539,
+      "latency_ms": 215.5
+    },
+    {
+      "offset_seconds": 18.54,
+      "latency_ms": 215.4
+    },
+    {
+      "offset_seconds": 38.872,
+      "latency_ms": 339.7
+    },
+    {
+      "offset_seconds": 38.875,
+      "latency_ms": 337
+    },
+    {
+      "offset_seconds": 38.877,
+      "latency_ms": 335.2
+    },
+    {
+      "offset_seconds": 38.877,
+      "latency_ms": 335
+    },
+    {
+      "offset_seconds": 38.877,
+      "latency_ms": 335.2
+    },
+    {
+      "offset_seconds": 38.877,
+      "latency_ms": 335
+    },
+    {
+      "offset_seconds": 38.877,
+      "latency_ms": 335.2
+    },
+    {
+      "offset_seconds": 38.877,
+      "latency_ms": 335.2
+    },
+    {
+      "offset_seconds": 38.877,
+      "latency_ms": 335.3
+    },
+    {
+      "offset_seconds": 38.877,
+      "latency_ms": 335.1
+    },
+    {
+      "offset_seconds": 38.877,
+      "latency_ms": 335
+    },
+    {
+      "offset_seconds": 38.877,
+      "latency_ms": 335.2
+    },
+    {
+      "offset_seconds": 38.877,
+      "latency_ms": 335.2
+    },
+    {
+      "offset_seconds": 38.877,
+      "latency_ms": 335.1
+    },
+    {
+      "offset_seconds": 38.878,
+      "latency_ms": 335.8
+    },
+    {
+      "offset_seconds": 38.878,
+      "latency_ms": 334.7
+    },
+    {
+      "offset_seconds": 48.809,
+      "latency_ms": 196.1
+    },
+    {
+      "offset_seconds": 48.809,
+      "latency_ms": 196.7
+    },
+    {
+      "offset_seconds": 48.81,
+      "latency_ms": 195.8
+    },
+    {
+      "offset_seconds": 48.81,
+      "latency_ms": 196.1
+    },
+    {
+      "offset_seconds": 48.81,
+      "latency_ms": 195.6
+    },
+    {
+      "offset_seconds": 48.81,
+      "latency_ms": 195.8
+    },
+    {
+      "offset_seconds": 48.81,
+      "latency_ms": 195.8
+    },
+    {
+      "offset_seconds": 48.81,
+      "latency_ms": 196.1
+    },
+    {
+      "offset_seconds": 48.81,
+      "latency_ms": 195.6
+    },
+    {
+      "offset_seconds": 48.81,
+      "latency_ms": 196.1
+    },
+    {
+      "offset_seconds": 48.81,
+      "latency_ms": 196
+    },
+    {
+      "offset_seconds": 48.81,
+      "latency_ms": 195.5
+    },
+    {
+      "offset_seconds": 48.81,
+      "latency_ms": 195.9
+    },
+    {
+      "offset_seconds": 48.81,
+      "latency_ms": 196
+    },
+    {
+      "offset_seconds": 48.811,
+      "latency_ms": 194.9
+    },
+    {
+      "offset_seconds": 48.811,
+      "latency_ms": 195
+    }
+  ],
+  "environment": {
+    "os": "Microsoft Windows 10.0.26300",
+    "architecture": "X64",
+    "runtime": ".NET 10.0.14",
+    "processor_count": 8
+  }
+}

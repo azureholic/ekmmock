@@ -1,0 +1,636 @@
+{
+  "tool": "ekmmock test bench",
+  "version": "0.2.0",
+  "started_at_utc": "2026-11-09T20:54:19.8497675+00:00",
+  "target": "https://127.0.0.1:28443",
+  "operation": "unwrapkey",
+  "key": "aes-key-1",
+  "algorithm": "A256KWP",
+  "concurrency": 16,
+  "duration_seconds": 60,
+  "warmup_seconds": 5,
+  "model": "closed loop: each worker sends its next request when the previous one is answered (does not correct coordinated omission)",
+  "requests": 1813291,
+  "errors": 0,
+  "throughput_rps": 30221.3,
+  "latency_ms": {
+    "min": 0.125,
+    "mean": 0.529,
+    "p50": 0.407,
+    "p90": 0.675,
+    "p99": 1.559,
+    "p999": 23.423,
+    "max": 326.765
+  },
+  "over_budget": {
+    "threshold_ms": 250,
+    "count": 16,
+    "percent": 0.0009
+  },
+  "status_counts": {
+    "200": 1813291
+  },
+  "histogram": [
+    {
+      "le": "\u003C= 1 ms",
+      "count": 1754782
+    },
+    {
+      "le": "\u003C= 2 ms",
+      "count": 47816
+    },
+    {
+      "le": "\u003C= 5 ms",
+      "count": 5954
+    },
+    {
+      "le": "\u003C= 10 ms",
+      "count": 452
+    },
+    {
+      "le": "\u003C= 25 ms",
+      "count": 3196
+    },
+    {
+      "le": "\u003C= 50 ms",
+      "count": 835
+    },
+    {
+      "le": "\u003C= 100 ms",
+      "count": 128
+    },
+    {
+      "le": "\u003C= 150 ms",
+      "count": 80
+    },
+    {
+      "le": "\u003C= 200 ms",
+      "count": 15
+    },
+    {
+      "le": "\u003C= 250 ms",
+      "count": 17
+    },
+    {
+      "le": "\u003C= 500 ms",
+      "count": 16
+    },
+    {
+      "le": "\u003C= 1000 ms",
+      "count": 0
+    },
+    {
+      "le": "\u003E 1000 ms",
+      "count": 0
+    }
+  ],
+  "threshold_failures": [],
+  "slow_requests": [
+    {
+      "offset_seconds": 3.382,
+      "latency_ms": 102.6
+    },
+    {
+      "offset_seconds": 3.382,
+      "latency_ms": 102.6
+    },
+    {
+      "offset_seconds": 3.382,
+      "latency_ms": 102.7
+    },
+    {
+      "offset_seconds": 3.382,
+      "latency_ms": 102.7
+    },
+    {
+      "offset_seconds": 3.382,
+      "latency_ms": 102.8
+    },
+    {
+      "offset_seconds": 3.382,
+      "latency_ms": 102.7
+    },
+    {
+      "offset_seconds": 3.382,
+      "latency_ms": 102.6
+    },
+    {
+      "offset_seconds": 3.382,
+      "latency_ms": 102.7
+    },
+    {
+      "offset_seconds": 3.382,
+      "latency_ms": 102.7
+    },
+    {
+      "offset_seconds": 3.382,
+      "latency_ms": 102.6
+    },
+    {
+      "offset_seconds": 3.382,
+      "latency_ms": 102.6
+    },
+    {
+      "offset_seconds": 3.382,
+      "latency_ms": 102.7
+    },
+    {
+      "offset_seconds": 3.382,
+      "latency_ms": 102.7
+    },
+    {
+      "offset_seconds": 3.382,
+      "latency_ms": 102.7
+    },
+    {
+      "offset_seconds": 3.382,
+      "latency_ms": 102.6
+    },
+    {
+      "offset_seconds": 3.382,
+      "latency_ms": 102.7
+    },
+    {
+      "offset_seconds": 23.279,
+      "latency_ms": 190.8
+    },
+    {
+      "offset_seconds": 23.279,
+      "latency_ms": 190.7
+    },
+    {
+      "offset_seconds": 23.279,
+      "latency_ms": 190.7
+    },
+    {
+      "offset_seconds": 23.279,
+      "latency_ms": 190.8
+    },
+    {
+      "offset_seconds": 23.279,
+      "latency_ms": 190.9
+    },
+    {
+      "offset_seconds": 23.279,
+      "latency_ms": 190.7
+    },
+    {
+      "offset_seconds": 23.279,
+      "latency_ms": 190.5
+    },
+    {
+      "offset_seconds": 23.279,
+      "latency_ms": 190.5
+    },
+    {
+      "offset_seconds": 23.279,
+      "latency_ms": 210.9
+    },
+    {
+      "offset_seconds": 23.279,
+      "latency_ms": 190.6
+    },
+    {
+      "offset_seconds": 23.279,
+      "latency_ms": 190.3
+    },
+    {
+      "offset_seconds": 23.279,
+      "latency_ms": 190.3
+    },
+    {
+      "offset_seconds": 23.279,
+      "latency_ms": 190.5
+    },
+    {
+      "offset_seconds": 23.279,
+      "latency_ms": 190.7
+    },
+    {
+      "offset_seconds": 23.28,
+      "latency_ms": 190.6
+    },
+    {
+      "offset_seconds": 23.28,
+      "latency_ms": 190.5
+    },
+    {
+      "offset_seconds": 23.755,
+      "latency_ms": 326.4
+    },
+    {
+      "offset_seconds": 23.755,
+      "latency_ms": 326.3
+    },
+    {
+      "offset_seconds": 23.755,
+      "latency_ms": 326.5
+    },
+    {
+      "offset_seconds": 23.755,
+      "latency_ms": 326.8
+    },
+    {
+      "offset_seconds": 23.755,
+      "latency_ms": 326.5
+    },
+    {
+      "offset_seconds": 23.755,
+      "latency_ms": 326.3
+    },
+    {
+      "offset_seconds": 23.755,
+      "latency_ms": 326.6
+    },
+    {
+      "offset_seconds": 23.755,
+      "latency_ms": 326.5
+    },
+    {
+      "offset_seconds": 23.755,
+      "latency_ms": 326.7
+    },
+    {
+      "offset_seconds": 23.755,
+      "latency_ms": 326.6
+    },
+    {
+      "offset_seconds": 23.755,
+      "latency_ms": 326.5
+    },
+    {
+      "offset_seconds": 23.755,
+      "latency_ms": 326.5
+    },
+    {
+      "offset_seconds": 23.756,
+      "latency_ms": 326.3
+    },
+    {
+      "offset_seconds": 23.756,
+      "latency_ms": 326.4
+    },
+    {
+      "offset_seconds": 23.756,
+      "latency_ms": 326.5
+    },
+    {
+      "offset_seconds": 23.756,
+      "latency_ms": 326.4
+    },
+    {
+      "offset_seconds": 33.452,
+      "latency_ms": 122.7
+    },
+    {
+      "offset_seconds": 33.452,
+      "latency_ms": 122.5
+    },
+    {
+      "offset_seconds": 33.452,
+      "latency_ms": 122.3
+    },
+    {
+      "offset_seconds": 33.452,
+      "latency_ms": 122
+    },
+    {
+      "offset_seconds": 33.452,
+      "latency_ms": 122.2
+    },
+    {
+      "offset_seconds": 33.452,
+      "latency_ms": 122.4
+    },
+    {
+      "offset_seconds": 33.452,
+      "latency_ms": 122.4
+    },
+    {
+      "offset_seconds": 33.452,
+      "latency_ms": 122.6
+    },
+    {
+      "offset_seconds": 33.452,
+      "latency_ms": 122.4
+    },
+    {
+      "offset_seconds": 33.452,
+      "latency_ms": 122.5
+    },
+    {
+      "offset_seconds": 33.452,
+      "latency_ms": 122.3
+    },
+    {
+      "offset_seconds": 33.452,
+      "latency_ms": 122.5
+    },
+    {
+      "offset_seconds": 33.452,
+      "latency_ms": 122.1
+    },
+    {
+      "offset_seconds": 33.452,
+      "latency_ms": 122.3
+    },
+    {
+      "offset_seconds": 33.452,
+      "latency_ms": 122.4
+    },
+    {
+      "offset_seconds": 33.452,
+      "latency_ms": 122.4
+    },
+    {
+      "offset_seconds": 33.842,
+      "latency_ms": 100.3
+    },
+    {
+      "offset_seconds": 33.842,
+      "latency_ms": 100.1
+    },
+    {
+      "offset_seconds": 33.842,
+      "latency_ms": 100.1
+    },
+    {
+      "offset_seconds": 33.842,
+      "latency_ms": 100.2
+    },
+    {
+      "offset_seconds": 33.842,
+      "latency_ms": 100
+    },
+    {
+      "offset_seconds": 33.842,
+      "latency_ms": 100.2
+    },
+    {
+      "offset_seconds": 33.842,
+      "latency_ms": 100.1
+    },
+    {
+      "offset_seconds": 43.795,
+      "latency_ms": 201
+    },
+    {
+      "offset_seconds": 43.795,
+      "latency_ms": 201.2
+    },
+    {
+      "offset_seconds": 43.795,
+      "latency_ms": 200.9
+    },
+    {
+      "offset_seconds": 43.795,
+      "latency_ms": 200.9
+    },
+    {
+      "offset_seconds": 43.795,
+      "latency_ms": 201
+    },
+    {
+      "offset_seconds": 43.795,
+      "latency_ms": 200.9
+    },
+    {
+      "offset_seconds": 43.795,
+      "latency_ms": 201.2
+    },
+    {
+      "offset_seconds": 43.795,
+      "latency_ms": 201.1
+    },
+    {
+      "offset_seconds": 43.795,
+      "latency_ms": 201.2
+    },
+    {
+      "offset_seconds": 43.795,
+      "latency_ms": 201
+    },
+    {
+      "offset_seconds": 43.795,
+      "latency_ms": 201.3
+    },
+    {
+      "offset_seconds": 43.795,
+      "latency_ms": 201
+    },
+    {
+      "offset_seconds": 43.795,
+      "latency_ms": 201.1
+    },
+    {
+      "offset_seconds": 43.795,
+      "latency_ms": 201.3
+    },
+    {
+      "offset_seconds": 43.795,
+      "latency_ms": 201.3
+    },
+    {
+      "offset_seconds": 43.795,
+      "latency_ms": 201
+    },
+    {
+      "offset_seconds": 44.212,
+      "latency_ms": 117.4
+    },
+    {
+      "offset_seconds": 44.212,
+      "latency_ms": 117.5
+    },
+    {
+      "offset_seconds": 44.212,
+      "latency_ms": 117.6
+    },
+    {
+      "offset_seconds": 44.212,
+      "latency_ms": 117.9
+    },
+    {
+      "offset_seconds": 44.212,
+      "latency_ms": 117.8
+    },
+    {
+      "offset_seconds": 44.212,
+      "latency_ms": 117.6
+    },
+    {
+      "offset_seconds": 44.212,
+      "latency_ms": 117.9
+    },
+    {
+      "offset_seconds": 44.212,
+      "latency_ms": 117.6
+    },
+    {
+      "offset_seconds": 44.212,
+      "latency_ms": 117.5
+    },
+    {
+      "offset_seconds": 44.212,
+      "latency_ms": 117.7
+    },
+    {
+      "offset_seconds": 44.212,
+      "latency_ms": 117.6
+    },
+    {
+      "offset_seconds": 44.212,
+      "latency_ms": 117.8
+    },
+    {
+      "offset_seconds": 44.212,
+      "latency_ms": 117.5
+    },
+    {
+      "offset_seconds": 44.212,
+      "latency_ms": 118
+    },
+    {
+      "offset_seconds": 44.212,
+      "latency_ms": 117.6
+    },
+    {
+      "offset_seconds": 44.212,
+      "latency_ms": 117.7
+    },
+    {
+      "offset_seconds": 53.514,
+      "latency_ms": 142.9
+    },
+    {
+      "offset_seconds": 53.514,
+      "latency_ms": 142.9
+    },
+    {
+      "offset_seconds": 53.514,
+      "latency_ms": 143.1
+    },
+    {
+      "offset_seconds": 53.514,
+      "latency_ms": 143
+    },
+    {
+      "offset_seconds": 53.514,
+      "latency_ms": 142.9
+    },
+    {
+      "offset_seconds": 53.514,
+      "latency_ms": 143.1
+    },
+    {
+      "offset_seconds": 53.514,
+      "latency_ms": 142.9
+    },
+    {
+      "offset_seconds": 53.514,
+      "latency_ms": 142.9
+    },
+    {
+      "offset_seconds": 53.514,
+      "latency_ms": 143.2
+    },
+    {
+      "offset_seconds": 53.514,
+      "latency_ms": 143
+    },
+    {
+      "offset_seconds": 53.514,
+      "latency_ms": 143
+    },
+    {
+      "offset_seconds": 53.514,
+      "latency_ms": 143.2
+    },
+    {
+      "offset_seconds": 53.514,
+      "latency_ms": 143.1
+    },
+    {
+      "offset_seconds": 53.514,
+      "latency_ms": 143
+    },
+    {
+      "offset_seconds": 53.514,
+      "latency_ms": 143
+    },
+    {
+      "offset_seconds": 53.514,
+      "latency_ms": 143
+    },
+    {
+      "offset_seconds": 54.244,
+      "latency_ms": 113.9
+    },
+    {
+      "offset_seconds": 54.244,
+      "latency_ms": 113.8
+    },
+    {
+      "offset_seconds": 54.244,
+      "latency_ms": 114.2
+    },
+    {
+      "offset_seconds": 54.244,
+      "latency_ms": 114
+    },
+    {
+      "offset_seconds": 54.244,
+      "latency_ms": 114
+    },
+    {
+      "offset_seconds": 54.244,
+      "latency_ms": 114
+    },
+    {
+      "offset_seconds": 54.244,
+      "latency_ms": 114
+    },
+    {
+      "offset_seconds": 54.244,
+      "latency_ms": 113.7
+    },
+    {
+      "offset_seconds": 54.244,
+      "latency_ms": 114.2
+    },
+    {
+      "offset_seconds": 54.244,
+      "latency_ms": 114.2
+    },
+    {
+      "offset_seconds": 54.244,
+      "latency_ms": 113.9
+    },
+    {
+      "offset_seconds": 54.244,
+      "latency_ms": 114.1
+    },
+    {
+      "offset_seconds": 54.244,
+      "latency_ms": 114.1
+    },
+    {
+      "offset_seconds": 54.244,
+      "latency_ms": 114.1
+    },
+    {
+      "offset_seconds": 54.244,
+      "latency_ms": 113.7
+    },
+    {
+      "offset_seconds": 54.244,
+      "latency_ms": 113.9
+    }
+  ],
+  "environment": {
+    "os": "Microsoft Windows 10.0.26300",
+    "architecture": "X64",
+    "runtime": ".NET 10.0.14",
+    "processor_count": 8
+  }
+}

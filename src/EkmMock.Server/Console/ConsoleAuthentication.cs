@@ -2,6 +2,7 @@ using System.Security.Claims;
 using System.Text.Encodings.Web;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Components.Authorization;
@@ -156,6 +157,30 @@ internal sealed class LoopbackAuthenticationHandler : AuthenticationHandler<Auth
     }
 }
 
+/// <summary>
+/// Bearer-token access to <c>/api/console/*</c> for the CLI in <see cref="ConsoleAuthMode.EntraId"/> (spec 12, open question 38). The token is the user's Entra access token
+/// for the console's app registration, validated by Microsoft.Identity.Web (signature, issuer, audience, lifetime) and then judged by the same
+/// <see cref="ConsoleAccessPolicy"/> (allowed object ids or group, tenant) as the browser sign-in. Accepted on <c>/api/console/*</c> <b>only</b>: never for Blazor pages,
+/// <c>/_blazor</c>, <c>/metrics</c> or the EKM endpoint (the EKM port does not run the console pipeline at all).
+/// </summary>
+internal static class ConsoleBearer
+{
+    public const string Scheme = "EkmMock.Bearer";
+
+    public const string SelectorScheme = "EkmMock.ConsoleAuth";
+
+    /// <summary>Set in <c>HttpContext.Items</c> by the bearer handler once it validated the token of this request.</summary>
+    public const string AuthenticatedItem = "ekmmock:bearer-authenticated";
+
+    public static bool IsBearerApiRequest(HttpRequest request)
+        => request.Path.StartsWithSegments(ConsoleApi.BasePath, StringComparison.OrdinalIgnoreCase)
+            && request.Headers.Authorization.ToString().StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>True when this request was authenticated by a validated bearer token. Such a request carries no ambient credential (no cookie), so it cannot be forged cross-site.</summary>
+    public static bool IsBearerAuthenticated(HttpContext context)
+        => context.Items.TryGetValue(AuthenticatedItem, out var marker) && marker is true && context.User.Identity?.IsAuthenticated == true;
+}
+
 /// <summary>Authentication and authorization of the console (spec 5.4), chosen by <see cref="ConsoleOptions.Auth"/>.</summary>
 internal static class ConsoleAuth
 {
@@ -199,7 +224,41 @@ internal static class ConsoleAuth
         // The secret is read once from the environment (never from configuration) and only ever handed to the OIDC client.
         var secret = ConsoleSecrets.ReadClientSecret();
 
-        services.AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
+        // The default scheme is a policy scheme that sends a bearer-carrying request for /api/console/* to the JWT bearer scheme (the CLI, spec 12) and everything else to the
+        // OpenID Connect + cookie sign-in (the browser). The selector looks at the path, so a bearer token is never looked at for pages, the SignalR hub or anything else.
+        var builder = services.AddAuthentication(ConsoleBearer.SelectorScheme);
+        builder.AddPolicyScheme(ConsoleBearer.SelectorScheme, "EkmMock console", scheme =>
+        {
+            scheme.ForwardDefault = OpenIdConnectDefaults.AuthenticationScheme;
+            scheme.ForwardDefaultSelector = static context => ConsoleBearer.IsBearerApiRequest(context.Request) ? ConsoleBearer.Scheme : null;
+        });
+        builder.AddMicrosoftIdentityWebApi(
+            jwt =>
+            {
+                // Short claim names (oid, tid, name, groups): ConsoleAccessPolicy and the audit name read the same claims for both sign-in paths.
+                jwt.MapInboundClaims = false;
+                jwt.TokenValidationParameters.NameClaimType = ConsoleClaims.Name;
+            },
+            identity =>
+            {
+                identity.Instance = entra.Instance ?? "https://login.microsoftonline.com/";
+                identity.TenantId = entra.TenantId;
+                identity.ClientId = entra.ClientId;
+            },
+            ConsoleBearer.Scheme,
+            subscribeToJwtBearerMiddlewareDiagnosticsEvents: false);
+        services.PostConfigure<JwtBearerOptions>(ConsoleBearer.Scheme, static jwt =>
+        {
+            // Remember that this request was authenticated by a bearer token: that is what makes it a non-browser call for the CSRF rule of ConsoleMutationFilter.
+            var previous = jwt.Events.OnTokenValidated;
+            jwt.Events.OnTokenValidated = async context =>
+            {
+                context.HttpContext.Items[ConsoleBearer.AuthenticatedItem] = true;
+                await previous(context).ConfigureAwait(false);
+            };
+        });
+
+        builder
             .AddMicrosoftIdentityWebApp(
                 identity =>
                 {
