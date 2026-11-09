@@ -10,6 +10,10 @@ updates:
     groups:
       nuget-minor-and-patch:
         update-types: [minor, patch]
+    ignore:
+      # Fluent UI Blazor v4 is a deliberate choice (docs/DECISIONS.md "M5: Packages", open question 37): v5 is a different component model and needs its own migration.
+      - dependency-name: "Microsoft.FluentUI.AspNetCore.Components*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
