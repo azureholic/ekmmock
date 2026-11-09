@@ -158,3 +158,148 @@
   reference beyond the BCL (a test asserts it references no ASP.NET Core, `Microsoft.Extensions.*` or third-party crypto assembly).
   `InternalsVisibleTo` is granted to `EkmMock.Crypto.Tests` only.
 - The solution uses the classic `.sln` format (`dotnet new sln --format sln`).
+
+## M2: EKM request pipeline and host composition
+
+- **Project:** `src/EkmMock.Server` (Web SDK, Minimal-API host, no controllers, no ProblemDetails, no Kestrel/TLS code). `Program.cs` is
+  four lines plus `public partial class Program` for `WebApplicationFactory<Program>`; all wiring lives in
+  `Hosting/EkmServerServiceCollectionExtensions` (`AddEkmMockServer` for the host, `AddEkmMockServices` for the services) and
+  `Ekm/EkmPipeline` (`UseEkmPipeline`). Everything except `Program` is `internal` (`InternalsVisibleTo EkmMock.Server.Tests`).
+- **Pipeline (spec 7), as built:** `Exchange → Route → [Faults M7] → [Auth M3] → [Limits M7] → Dispatcher → ICryptoBackend`.
+  `Exchange` creates the `EkmRequestContext` feature, is the global safety net and writes the log line. `[RequestCapture M4]` goes
+  *in front of* `Exchange` so rejected requests are captured too. **Clarification of spec 7:** routing (namespace, op, key) is resolved
+  right after capture and before Faults/Auth, because both need the namespace (and faults the op and key). An unroutable path is
+  therefore `404 NotFound` before authentication; a client cannot be authenticated for an unknown namespace anyway.
+- **Why a branch and a terminal delegate instead of endpoint routing:** spec 4.2 forbids template routes for the prefix. The EKM
+  branch is `UseWhen(EkmPipeline.IsEkmRequest, …)`; in M2 the predicate is `true`, M5 narrows it to the EKM listener
+  (`HttpContext.Connection.LocalPort`) and gives the console port its own branch. The last stage is one delegate that calls
+  `EkmDispatcher`; per-operation handlers are plain methods on `EkmHandlers`. Nothing outside the branch handles EKM paths.
+- **`EkmRequestContext`** (feature on `HttpContext`, `ctx.GetEkmContext()`): exchange id (sequential from 1), connection id, received
+  at, route (namespace/op/key), api-version, `request_id`/`correlation_id`/`pool_name` (each capped at 256 chars), alg, request body
+  size, status, error code, crypto time, total time, unexpected exception type. It never holds `value`, bodies or headers. M4 (inspector),
+  M3 (client CN) and M7 (faults, limits) extend it.
+- **Engine availability seam:** `IEngineAvailability.IsAvailable` (default: startup finished and `ICryptoBackend.IsAvailable`).
+  `info` and every key operation answer `503 HsmUnavailable` when it is false; M7's "HSM offline" fault replaces or decorates it.
+  A corrupt key does not make the engine unavailable: `info` stays 200 and only that key's operations (metadata, wrap, unwrap) are 503
+  (spec 14 test 19; proven with a wrong master key).
+- **Startup (`EkmStartupService`, a hosted service, so it runs before the server accepts traffic; observed with a real Kestrel run):**
+  listener guard, open key store (constructing `SoftwareCryptoBackend` throws `MasterKeyUnavailableException` without a master key, so the
+  host refuses to start and writes nothing), open namespaces (seeded from `SeedNamespaces` only if `namespaces.json` does not exist),
+  optional sample keys, startup self-test (`SelfTest:Strict` makes a failed self-test fatal), then `EkmStartupState.MarkReady`. Until
+  ready the engine reports unavailable.
+- **Master key and secrets:** `IMasterKeyProvider` defaults to M1's `EnvironmentMasterKeyProvider` (`EKMMOCK_MASTER_KEY` /
+  `EKMMOCK_MASTER_KEY_FILE`), read straight from the environment, never from `IConfiguration`; `appsettings.json` has no secret and a test
+  guards that. Tests replace the provider through DI. `EKMMOCK_ALLOW_KEY_IMPORT=true` is read once into the backend options.
+- **`--dev`:** the flag sets `Dev:Enabled=true` (in-memory configuration, highest precedence). Effects: a missing master key becomes a
+  throw-away one (`SoftwareCryptoBackend.IsMasterKeyThrowAway`, logged as a warning now, a red console banner in M5) and the plain-HTTP guard
+  is relaxed. `Dev:SeedSampleKeys=true` (default false, also off in the shipped `appsettings.json`) creates `aes-key-1` (AES-256) and
+  `rsa-key-1` (RSA-2048) in `_default` if they do not exist (including as tombstones); they are created before the self-test, which then covers them.
+- **No plain HTTP on a real port (M3 TODO):** `Endpoints:Ekm:Url` is a placeholder key in `appsettings.json` that no M2 code reads. The M2
+  server configures no listener. `PlainHttpGuard` makes the host refuse to start when the `IServer` is anything but the in-process test
+  server unless `--dev` is set (a plain `dotnet run` fails with an explanatory error; verified). **M3 TODO:** replace the guard with real
+  Kestrel endpoints (TLS 1.3, cipher suites, mTLS) read from `Endpoints:Ekm:Url`, set `MaxRequestBodySize` so Kestrel does not answer
+  with its own non-ProxyError 413 before the handler's 16 KiB check (until then the handler enforces the limit itself, and a
+  `BadHttpRequestException` from the host is mapped to `400 InvalidRequest`), and re-verify chunked bodies and percent-encoded paths on real
+  Kestrel with automated tests (M2 verified them manually only, see "Not covered" below).
+- **Configuration (`appsettings.json`, spec 16):** `ProxyInfo`, `Data:Path`, `SeedNamespaces`, `SelfTest:Strict`, `Dev`, plus the `Endpoints`
+  placeholder. Bound to `ProxyInfoOptions` (validated on start: no empty value), `DataOptions`, `SelfTestSettings`, `DevOptions`,
+  `SeedNamespaceOptions`. `Data:Path` defaults to `/data` as in the spec; tests always override the folder (`PostConfigure`), so no test can
+  write there. `Limits`, `Inspector`, `Console`, `Tls` arrive with their milestones.
+- **Logging:** `ILogger` with the built-in JSON console formatter (UTC timestamps, no scopes). One `EkmMock.Exchange` line per request with the
+  spec 9 fields that exist now: `exchange_id, request_id, correlation_id, pool_name, namespace, op, key, alg, status, error_code,
+  duration_ms, crypto_ms` plus `exception_type` (type name only, set for unexpected failures, level Error). Missing until M3/M7:
+  `client_cn`, `injected_delay_ms`, and the 150/250 ms warning/error thresholds (M7). The logged `alg` is the supported name or the literal
+  `unsupported` (client text is never logged), `key` is cut to 80 characters. A test proves that no DEK, key material, master key, `value`,
+  `n`, `e` or body reaches the log.
+
+## M2: EKM validation order (ordered-check table)
+
+The first failing check answers; later checks are never reached. Implemented in `EkmRouteMiddleware` (1) and `EkmDispatcher` (2 to 9).
+URL level checks come before anything is read from the body, so a bad URL never costs a body read.
+
+| # | Check | Failure | Status / `code` |
+|---|---|---|---|
+| 1 | Path resolves to a namespace (longest whole-segment prefix, case-sensitive, one trailing slash tolerated, no empty segments) and the rest is exactly `info` or `{key}/{metadata\|wrapkey\|unwrapkey}` | unknown prefix, unknown op, extra segments | 404 `NotFound` |
+| 1a | *(M7 Faults, M3 Auth, M7 Limits slot in here)* | | |
+| 2 | Method is exactly `POST` (case-sensitive; response has `Allow: POST`) | any other method | 405 `MethodNotAllowed` |
+| 3 | `api-version` query parameter present exactly once and equal to `0.1-preview` (case-sensitive) | missing, empty, repeated, other | 400 `UnsupportedApiVersion` |
+| 4 | Key operations: key name matches `^[A-Za-z0-9-]{1,64}$` (`EkmNames.IsValidKeyName`) | any other name | 400 `InvalidKeyName` |
+| 5 | `Content-Type` is `application/json` (case-insensitive, optional `charset=utf-8`) | missing, other type, other charset | 400 `InvalidRequest` |
+| 6 | Body at most 16 KiB (checked on `Content-Length` and while reading, so chunked bodies are covered) | larger | 400 `InvalidRequest` |
+| 7 | Body is one JSON object (valid UTF-8, optional BOM, no comments, no trailing commas, no trailing content, depth at most 32) | anything else, empty body | 400 `InvalidRequest` |
+| 8 | `request_context` present as a JSON object (`request_id`, `correlation_id`, `pool_name` optional) | absent, null or not an object | 400 `InvalidRequest` |
+| 9 | Engine available (`IEngineAvailability`) | store not loaded, backend disposed, later the HSM-offline fault | 503 `HsmUnavailable` |
+| 10 | `info`: answer 200. `metadata`: `GetMetadata` | unknown or destroyed key; corrupt key | 404 `KeyNotFound`; 503 `HsmUnavailable` |
+| 11 | Wrap/unwrap syntax: `alg` is a string and present; `alg` is one of the four names (case-sensitive); `value` is a string and present; `value` is strict base64url | missing or mistyped; unknown alg; bad base64url | 400 `InvalidRequest`; 400 `UnsupportedAlgorithm`; 400 `InvalidRequest` |
+| 12 | Engine order (M1): key exists, key healthy, alg matches key type, key enabled, key not expired, input rules | unknown key; corrupt key; alg/key-type mismatch; disabled; expired; wrap input rule; unwrap length or integrity failure | 404 `KeyNotFound`; 503 `HsmUnavailable`; 400 `UnsupportedAlgorithm`; 403 `KeyDisabled`; 403 `KeyExpired`; 400 `InvalidRequest`; 400 `InvalidCiphertext` |
+
+Reasoning for the order: syntax before state (a malformed request is a 400 whatever the key's state), and 404/403/503 from the engine only
+for syntactically valid requests. `info` and `metadata` ignore a mistyped `alg`/`value` like any other unknown field; only wrap and unwrap
+reject it. The order is pinned by `ValidationOrder_IsRoute_Method_ApiVersion_KeyName_ContentType_Body_RequestContext_Engine` and the
+two tests next to it.
+
+## M2: EKM error mapping (one place)
+
+- **Location:** `src/EkmMock.Server/Ekm/ProxyErrors.cs` only. `ProxyErrors.StatusOf` is the status per wire code (spec 4.4),
+  `ProxyErrors.FromEngine(EkmErrorKind)` the single engine-kind to wire-code mapping, `ProxyErrors.Map(Exception, op)` the safety net used by
+  `EkmExchangeMiddleware`. A test fails if any other server source file mentions `EkmErrorKind.`, and another maps every enum member
+  (a new engine kind makes the exhaustive test fail until the table is extended deliberately).
+- **Table:** `KeyNotFound` 404; `KeyDisabled`, `KeyExpired`, `OperationNotAllowed` 403; `UnsupportedAlgorithm` 400; `InvalidInput` 400
+  `InvalidRequest`; `InvalidCiphertext` 400; `HsmUnavailable` 503; `InvalidKeyName` 400; `KeyAlreadyExists`, `KeyNameReserved`,
+  `InternalError` 500 `InternalError` (cannot arise from an EKM request; management-only kinds). Protocol-level codes: `InvalidRequest`,
+  `InvalidKeyName`, `UnsupportedApiVersion` 400; `Unauthenticated` 401 (M3); `NotFound` 404; `MethodNotAllowed` 405; `TooManyRequests` 429 (M7).
+- **Messages:** fixed literals, never exception text, input, key names or key material. `KeyDisabled`/`KeyExpired` use Learn's wording
+  ("Operation WrapKey is not allowed on a disabled key"). Anything unexpected is `500 InternalError` / "An internal error occurred"; the log gets
+  the exception *type name* only. `BadHttpRequestException` (host-level rejections) is `400 InvalidRequest`. A client that disconnects
+  mid-request is logged as status 499 and nothing is written.
+- **Decisions where the spec is silent:** the `405` code is `MethodNotAllowed` (spec 4.1 gives the status but no code; open question 9). An
+  unknown prefix, unknown operation and extra segments all use `NotFound`; `KeyNotFound` is reserved for a missing key.
+- **Failed unwrap** (wrong key, tampered or random input, wrong OAEP variant) is always `400 InvalidCiphertext`: tested by flipping every byte
+  of AES wrapped values and several of RSA ones.
+
+## M2: Base64url (answer to open question 7)
+
+- **Finding (measured on .NET 10.0.14, pinned by tests `OQ7_*`):** `System.Buffers.Text.Base64Url` decoding **accepts padded and unpadded**
+  input (`AQ`, `AQ==`, `AQA=`), rejects `+` and `/`, rejects non-canonical trailing bits (`AB`) and malformed padding, **but silently skips
+  whitespace** (`"AQ A"` and `"AQ\n"` are valid for the runtime). So no padding normalisation is needed, but strictness must be added.
+- **Decision:** `Base64UrlCodec.TryDecode` pre-scans the UTF-8 input: only `A-Z a-z 0-9 - _`, optionally followed by one or two `=` that
+  make the total length a multiple of four, and a length that is not 1 mod 4; then it calls the runtime decoder. Whitespace, `+`, `/`, an
+  inner `=`, non-ASCII, wrong padding and non-canonical bits are all `400 InvalidRequest` ("The value field is not valid base64url").
+  Output is always `Base64Url.EncodeToUtf8` (never padded). `n`/`e` use `RsaPublicKey` (M1, minimal big-endian) encoded the same way; 65537 is `AQAB`.
+- Empty `value` decodes to zero bytes and is then judged by the engine (wrap: `InvalidRequest`, unwrap: `InvalidCiphertext`).
+
+## M2: JSON and secret handling
+
+- **Source generation:** `EkmJsonContext` (`JsonNamingPolicy.SnakeCaseLower`, nulls omitted) serialises `ProxyError`, `ProxyInfoResponse` and
+  `KeyMetadataResponse`; the project sets `JsonSerializerIsReflectionEnabledByDefault=false`, so reflection serialisation cannot creep in.
+- **Requests are parsed by hand with `Utf8JsonReader`** (`EkmRequestBody`) and the `{"value":"…"}` responses are written by hand, so a DEK is
+  never a `string` (strings cannot be zeroed). The body is read into a rented buffer; `value` stays a UTF-8 slice of it (or a second rented buffer
+  when the JSON string contains escapes such as `\u002d`, which is legal JSON); it is decoded into a rented buffer, passed to the engine
+  as a span, and every buffer touched (request, decoded DEK, unwrap plaintext, response) is wiped with
+  `CryptographicOperations.ZeroMemory` before it returns to the pool. Unknown fields are skipped; duplicate fields: the last wins (as
+  `System.Text.Json` does). A concurrency test (24 tasks, distinct DEKs) proves pooled buffers are never mixed up. Limits of managed memory
+  still apply (copies made by the runtime or the GC cannot be wiped); the README will say so in M9.
+- `request_id`, `correlation_id`, `pool_name` of a non-string type are ignored (they are correlation aids only); a mistyped `alg` or
+  `value` is rejected by wrap/unwrap only.
+- Crypto is called synchronously on the request thread (no `Task.Run`); only HTTP I/O is awaited.
+
+## M2: Learn comparison
+
+The Microsoft Learn "EKM Proxy API reference" (`0.1-preview`, read on 9 November 2026) agrees with the implemented contract: POST only
+(`POST https://{server}/[path-prefix]/info|{key-name}/metadata|wrapkey|unwrapkey?api-version=0.1-preview`), `Content-Type: application/json`,
+`request_context` with `request_id` (optional), `correlation_id`, `pool_name`; ProxyError `{code, message}` with statuses 400/401/403/404/429/5xx
+and the example `KeyDisabled` / "Operation WrapKey is not allowed on a disabled key"; key types `oct` 256 and `RSA` 2048/3072/4096; `key_ops`
+exactly `["wrapKey","unwrapKey"]`; `n`/`e` as base64url of the unsigned big-endian bytes with `AQAB` for 65537; algorithms `A256KW`, `A256KWP`,
+`RSA-OAEP-256`, `RSA-OAEP`; key name `[A-Za-z0-9-]` up to 64 and prefix `[A-Za-z0-9/-]` up to 64. The Learn example values were used as test data
+(the 32 byte DEK wraps to 40 bytes, 54 unpadded characters). **No conflict was found** that stops work. Items Learn leaves open are
+recorded in OPEN-QUESTIONS.md (items 1, 9 to 14).
+
+## M2: Not covered / deliberately skipped
+
+- **No latency test for `info` (p99 < 5 ms).** In-process timings are dominated by test-host and JIT noise and would be flaky next to the
+  parallel RSA tests; real benchmarks belong to M4/M7. A manual real-Kestrel run showed 0.2 to 0.4 ms for warm `info` calls (single samples,
+  not a measurement).
+- **Chunked bodies** are tested in the test host as bodies without a `Content-Length` (and by hand against real Kestrel with
+  `Transfer-Encoding: chunked`: a 20 KB body gave the 400 ProxyError, a small one 200). Automated real-Kestrel tests come with M3.
+- **Percent-encoded slashes:** the test host decodes `%2F` in the path, real Kestrel does not. A key name containing `%2F` is
+  `400 InvalidKeyName` on real Kestrel (verified by hand) and a routing 404 in the test host; the automated test therefore leaves it out.

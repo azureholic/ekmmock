@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <RootNamespace>EkmMock.Server</RootNamespace>
+    <AssemblyName>EkmMock.Server</AssemblyName>
+    <!-- Source-generated System.Text.Json only: reflection-based serialization is switched off on purpose. -->
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\EkmMock.Crypto\EkmMock.Crypto.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="EkmMock.Server.Tests" />
+  </ItemGroup>
+
+</Project>
