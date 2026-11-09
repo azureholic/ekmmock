@@ -1,0 +1,159 @@
+@page "/dashboard"
+@using EkmMock.Server.Inspector
+@implements IDisposable
+@inject IInspectorQuery Inspector
+@inject TimeProvider Time
+@inject IOptions<LimitsOptions> Limits
+
+<PageTitle>Dashboard - EkmMock console</PageTitle>
+
+<h1 tabindex="-1">Dashboard</h1>
+
+<div class="dashboard-controls">
+    <div class="filter-field"><FluentSelect TOption="WindowChoice" Label="Window" Items="@Windows" OptionText="@(w => w.Label)" OptionValue="@(w => ((int)w.Window).ToString())"
+                  SelectedOption="_window" SelectedOptionChanged="OnWindowChanged" data-role="window" /></div>
+    <span class="dashboard-updated" data-role="updated" role="status">Updated @ConsoleDisplay.Time(_snapshot.GeneratedAtUtc) UTC, refreshes every @(RefreshSeconds) s</span>
+</div>
+
+<div class="dashboard-grid">
+    <HeartbeatCard LastInfoAtUtc="_snapshot.Heartbeat.LastInfoAtUtc"
+                   ClientCommonName="@_snapshot.Heartbeat.LastInfoClientCommonName"
+                   Status="_snapshot.Heartbeat.LastInfoStatus" />
+
+    <section class="dashboard-card" aria-labelledby="totals-title" data-role="totals">
+        <h2 id="totals-title" class="card-title">Last @((int)_window.Window) minutes</h2>
+        <dl class="stat-list">
+            <dt>Requests</dt><dd data-role="total-requests">@_view.Stats.Total</dd>
+            <dt>Errors</dt><dd data-role="total-errors">@_view.Stats.Errors</dd>
+            <dt>Over @Limits.Value.LatencyBudgetMs ms</dt>
+            <dd data-role="share-over-budget" class="@(_view.Stats.OverBudget > 0 ? "budget-red" : "budget-green")">@_view.Stats.OverBudget (@ConsoleDisplay.Percent(_view.Stats.OverBudgetShare))</dd>
+            <dt>Exchanges since start</dt><dd data-role="since-start">@_snapshot.ExchangesSinceStart</dd>
+            <dt>Dropped captures</dt>
+            <dd data-role="dropped-captures" class="@(_snapshot.DroppedCaptures > 0 ? "status-server" : null)">@_snapshot.DroppedCaptures@(_snapshot.DroppedCaptures > 0 ? " (the inspector could not keep up; oldest records were dropped)" : null)</dd>
+        </dl>
+    </section>
+</div>
+
+<section class="dashboard-card" aria-labelledby="rpm-title">
+    <h2 id="rpm-title" class="card-title">Requests</h2>
+    <StackedColumnChart Columns="_view.RequestsPerMinute" Title="Requests per minute by operation" />
+</section>
+
+<section class="dashboard-card" aria-labelledby="latency-title" data-role="latency-section">
+    <h2 id="latency-title" class="card-title">Latency over time (p50, p95, p99) against the @Limits.Value.LatencyBudgetMs ms budget</h2>
+    @if (_view.LatencyByOperation.Count == 0)
+    {
+        <p class="chart-empty" data-role="latency-empty">No latency data in this window yet.</p>
+    }
+    <div class="chart-matrix">
+        @foreach (var (operation, series) in _view.LatencyByOperation)
+        {
+            <LineChart Title="@($"{operation} latency")" Series="series" BudgetLine="@Limits.Value.LatencyBudgetMs" BudgetLabel="@($"{Limits.Value.LatencyBudgetMs} ms budget")"
+                       XMin="_view.WindowStart" XMax="_view.WindowEnd" />
+        }
+    </div>
+</section>
+
+<section class="dashboard-card" aria-labelledby="ops-title" data-role="operations">
+    <h2 id="ops-title" class="card-title">By operation</h2>
+    @if (_view.Stats.Operations.Count == 0)
+    {
+        <p class="chart-empty">No requests in this window yet.</p>
+    }
+    else
+    {
+        <table class="header-table ops-table">
+            <thead>
+                <tr>
+                    <th scope="col">Operation</th><th scope="col">Requests</th><th scope="col">Per minute</th><th scope="col">Errors</th>
+                    <th scope="col">p50</th><th scope="col">p95</th><th scope="col">p99</th><th scope="col">Max</th><th scope="col">Over budget</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var op in _view.Stats.Operations)
+                {
+                    <tr data-operation="@op.Operation">
+                        <th scope="row">@op.Operation</th>
+                        <td>@op.Count</td>
+                        <td><Sparkline Values="@RateOf(op.Operation)" Label="@($"{op.Operation} requests per minute")" /></td>
+                        <td>@op.Errors</td>
+                        <td>@ConsoleDisplay.Milliseconds(op.P50Ms)</td>
+                        <td>@ConsoleDisplay.Milliseconds(op.P95Ms)</td>
+                        <td>@ConsoleDisplay.Milliseconds(op.P99Ms)</td>
+                        <td>@ConsoleDisplay.Milliseconds(op.MaxMs)</td>
+                        <td class="@(op.OverBudget > 0 ? "budget-red" : null)">@op.OverBudget</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+</section>
+
+<section class="dashboard-card" aria-labelledby="errors-title" data-role="errors">
+    <h2 id="errors-title" class="card-title">Errors by code</h2>
+    <HorizontalBarChart Bars="_view.ErrorsByCode" Title="Errors by code" />
+</section>
+
+@code {
+    private const int RefreshSeconds = 2;
+
+    private sealed record WindowChoice(DashboardWindow Window, string Label);
+
+    private static readonly WindowChoice[] Windows =
+    [
+        new(DashboardWindow.Minutes15, "Last 15 minutes"),
+        new(DashboardWindow.Hour1, "Last hour"),
+    ];
+
+    private WindowChoice _window = Windows[0];
+    private DashboardSnapshot _snapshot = default!;
+    private DashboardView _view = default!;
+    private ITimer? _timer;
+    private bool _disposed;
+
+    protected override void OnInitialized()
+    {
+        Reload();
+        // The refresh is a timer on the circuit, disposed with the page. It reads the aggregates (maintained on the consumer thread), not the ring buffer.
+        _timer = Time.CreateTimer(_ => Tick(), null, TimeSpan.FromSeconds(RefreshSeconds), TimeSpan.FromSeconds(RefreshSeconds));
+    }
+
+    private void Reload()
+    {
+        _snapshot = Inspector.Dashboard();
+        _view = DashboardView.From(_snapshot, _window.Window);
+    }
+
+    private void Tick()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _ = InvokeAsync(() =>
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            Reload();
+            StateHasChanged();
+        });
+    }
+
+    private void OnWindowChanged(WindowChoice choice)
+    {
+        _window = choice;
+        Reload();
+    }
+
+    private IReadOnlyList<double> RateOf(string operation) => _view.RateByOperation.TryGetValue(operation, out var rate) ? rate : [];
+
+    public void Dispose()
+    {
+        _disposed = true;
+        _timer?.Dispose();
+    }
+}

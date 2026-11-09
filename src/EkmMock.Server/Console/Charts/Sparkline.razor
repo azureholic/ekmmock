@@ -1,0 +1,31 @@
+<span class="sparkline" data-chart="sparkline" role="img" aria-label="@AriaLabel">
+    @if (Values.Count > 1)
+    {
+        <svg viewBox="0 0 @Width @Height" width="@Width" height="@Height" aria-hidden="true">
+            <polyline class="sparkline-line" fill="none" points="@Points" />
+        </svg>
+    }
+    <span class="sparkline-value" data-role="latest">@(Values.Count == 0 ? "-" : ChartScale.Format(Values[^1]))</span>
+</span>
+
+@code {
+    private const double Width = 80;
+    private const double Height = 20;
+
+    /// <summary>The values, oldest first (for example requests per minute over the last 15 minutes).</summary>
+    [Parameter] public IReadOnlyList<double> Values { get; set; } = [];
+
+    [Parameter] public string Label { get; set; } = "trend";
+
+    private string AriaLabel => Values.Count == 0 ? $"{Label}: no data" : $"{Label}: latest {ChartScale.Format(Values[^1])}, highest {ChartScale.Format(Values.Max())}";
+
+    private string Points
+    {
+        get
+        {
+            var max = Math.Max(1, Values.Max());
+            var step = Values.Count > 1 ? Width / (Values.Count - 1) : 0;
+            return string.Join(' ', Values.Select((v, i) => $"{ChartScale.Px(i * step)},{ChartScale.Px(Height - 2 - ((Height - 4) * v / max))}"));
+        }
+    }
+}

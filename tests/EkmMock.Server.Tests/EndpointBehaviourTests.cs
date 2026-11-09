@@ -511,7 +511,7 @@ public sealed class DevModeHostTests
         {
             var app = EkmServerServiceCollectionExtensions.BuildEkmMockApp([], builder =>
             {
-                builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?> { ["Data:Path"] = folder.Path, ["Endpoints:Ekm:Url"] = "https://127.0.0.1:0" });
+                builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?> { ["Data:Path"] = folder.Path, ["Endpoints:Ekm:Url"] = "https://127.0.0.1:0", ["Endpoints:Console:Url"] = "https://127.0.0.1:0" });
                 builder.Services.AddSingleton<IMasterKeyProvider>(new ExplicitMasterKeyProvider(EkmFactory.MasterKeyBytes("nodev")));
                 builder.Logging.ClearProviders();
                 builder.Logging.AddProvider(logs);

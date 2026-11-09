@@ -1,0 +1,277 @@
+@using EkmMock.Server.Inspector
+@implements IDisposable
+
+@if (_record is null)
+{
+    <div class="detail-missing" role="status" data-role="detail-missing">
+        <strong>Exchange @ExchangeId is no longer in the inspector.</strong>
+        <p>The ring buffer holds the newest exchanges only (Inspector:RingBufferSize). Older ones are gone, but the masked JSONL files keep them when Inspector:Persist is on.</p>
+    </div>
+}
+else
+{
+    var record = _record;
+    <article class="exchange-detail @(Compact ? "detail-compact" : null)" data-role="exchange-detail" data-exchange-id="@record.Id">
+        <header class="detail-title">
+            <h2 class="detail-heading">Exchange @record.Id: @(record.Operation ?? "(unrouted)") <span class="@ConsoleDisplay.StatusCss(record.Status)" data-role="detail-status">@ConsoleDisplay.StatusText(record.Status, record.Response.Code)</span></h2>
+            <p class="detail-sub">@ConsoleDisplay.FullTime(record.ReceivedAtUtc)</p>
+        </header>
+
+        <ConsoleTabs Tabs="Tabs" Label="Exchange detail sections" @bind-ActiveId="_tab">
+            <Panel Context="tab">
+                @switch (tab)
+                {
+                    case "overview":
+                        @OverviewPanel(record)
+                        break;
+                    case "tls":
+                        @TlsPanel(record)
+                        break;
+                    case "request":
+                        @BodyPanel(record, isRequest: true)
+                        break;
+                    case "response":
+                        @BodyPanel(record, isRequest: false)
+                        break;
+                    case "timing":
+                        @TimingPanel(record)
+                        break;
+                }
+            </Panel>
+        </ConsoleTabs>
+    </article>
+}
+
+@code {
+    private RenderFragment OverviewPanel(ExchangeRecord record) => @<div class="detail-section" data-role="tab-overview">
+        <dl class="detail-grid">
+            <dt>Exchange id</dt><dd>@record.Id</dd>
+            <dt>Connection</dt><dd>@(record.Identity.ConnectionId ?? "-")</dd>
+            <dt>Remote</dt><dd>@(record.Identity.RemoteEndPoint ?? "-")</dd>
+            <dt>Operation</dt><dd>@(record.Operation ?? "(unrouted)")</dd>
+            <dt>Namespace</dt><dd>@(record.Request.Namespace ?? "-")@(string.IsNullOrEmpty(record.Request.Prefix) ? null : $" (prefix {record.Request.Prefix})")</dd>
+            <dt>Key</dt><dd>@(record.Request.Key ?? "-")</dd>
+            <dt>Algorithm</dt><dd>@(record.Context.Algorithm ?? "-")</dd>
+            <dt>api-version</dt><dd>@(record.Request.ApiVersion ?? "-")</dd>
+            <dt>Status</dt><dd><span class="@ConsoleDisplay.StatusCss(record.Status)">@ConsoleDisplay.StatusText(record.Status, record.Response.Code)</span></dd>
+            <dt>Latency</dt><dd><span class="@ConsoleDisplay.BudgetCss(record.Timing.Budget)">@ConsoleDisplay.Milliseconds(record.Timing.TotalMs) (@ConsoleDisplay.BudgetWord(record.Timing.Budget))</span></dd>
+            <dt>Client CN</dt><dd>@(record.ClientCertificate.CommonName ?? "(no certificate)")</dd>
+            <dt>correlation_id</dt>
+            <dd>
+                <code data-role="detail-correlation-id">@(record.Context.CorrelationId ?? "-")</code>
+                @if (!string.IsNullOrEmpty(record.Context.CorrelationId))
+                {
+                    <CopyButton Text="@record.Context.CorrelationId" Title="Copy correlation_id" Confirmation="correlation_id copied" />
+                }
+            </dd>
+            <dt>request_id</dt><dd>@(record.Context.RequestId ?? "-")</dd>
+            <dt>pool_name</dt><dd>@(record.Context.PoolName ?? "-")</dd>
+            @if (record.Key is { } key)
+            {
+                <dt>Key facts</dt><dd>@key.Type @key.Size bits, @key.State, wrapped @key.WrapCount times, unwrapped @key.UnwrapCount times (after this call)</dd>
+            }
+            @if (record.Faults is { } fault)
+            {
+                <dt>Fault</dt><dd><FluentBadge Appearance="Appearance.Accent">fault: @fault.Rule</FluentBadge></dd>
+            }
+        </dl>
+
+        <div class="detail-actions">
+            <CopyButton Text="@ExchangeJson(record)" Title="Copy the exchange as JSON (masked)" Confirmation="Exchange JSON copied (masked)">Copy JSON</CopyButton>
+            <FluentButton Appearance="Appearance.Neutral"
+                          IconStart="@(new Icons.Regular.Size16.ArrowRepeatAll())"
+                          Disabled="@(!_replay.Possible)"
+                          aria-describedby="replay-hint"
+                          data-role="replay"
+                          OnClick="ShowReplayNote">Replay</FluentButton>
+            <span id="replay-hint" class="detail-note" data-role="replay-hint">@ReplayTitle</span>
+            @if (_replayMessage is { } message)
+            {
+                <span class="detail-note" role="status" data-role="replay-message">@message</span>
+            }
+        </div>
+
+        <h3>Find it in Azure</h3>
+        @if (_kql is { } kql)
+        {
+            @if (kql.ByCorrelationId is { } byCorrelation)
+            {
+                <p class="detail-note">By <code>correlation_id</code> (Managed HSM diagnostic logs):</p>
+                <pre class="code-block" data-role="kql-correlation">@byCorrelation</pre>
+                <CopyButton Text="@byCorrelation" Title="Copy the KQL query" Confirmation="KQL copied">Copy KQL</CopyButton>
+            }
+            @if (kql.ByKeyAndTime is { } byKey)
+            {
+                <p class="detail-note">Fallback by key and time window:</p>
+                <pre class="code-block" data-role="kql-key-time">@byKey</pre>
+                <CopyButton Text="@byKey" Title="Copy the KQL fallback query" Confirmation="KQL copied">Copy KQL</CopyButton>
+            }
+        }
+    </div>;
+
+    private RenderFragment TlsPanel(ExchangeRecord record) => @<div class="detail-section" data-role="tab-tls">
+        <h3>TLS</h3>
+        @if (record.Tls is { } tls)
+        {
+            <dl class="detail-grid">
+                <dt>Protocol</dt><dd>@(tls.Protocol ?? "-")</dd>
+                <dt>Cipher suite</dt><dd>@(tls.CipherSuite ?? "-")</dd>
+                <dt>ALPN</dt><dd>@(tls.Alpn ?? "-")</dd>
+                <dt>SNI</dt><dd>@(tls.Sni ?? "-")</dd>
+                <dt>Session resumed</dt><dd>@(tls.Resumed is { } resumed ? (resumed ? "yes" : "no") : "unknown")</dd>
+                <dt>Handshake</dt><dd>@(tls.HandshakeMs is { } handshake ? ConsoleDisplay.Milliseconds(handshake) : "not on this exchange (connection reused)")</dd>
+                <dt>Request on connection</dt><dd>@tls.RequestNumberOnConnection</dd>
+            </dl>
+        }
+        else
+        {
+            <p class="detail-note">No TLS facts: this exchange did not arrive over a captured TLS connection.</p>
+        }
+
+        <h3>Client certificate</h3>
+        @{ var cert = record.ClientCertificate; }
+        <dl class="detail-grid">
+            <dt>Presented</dt><dd>@(cert.Present ? "yes" : "no")</dd>
+            @if (cert.Present)
+            {
+                <dt>Subject</dt><dd>@(cert.Subject ?? "-")</dd>
+                <dt>Issuer</dt><dd>@(cert.Issuer ?? "-")</dd>
+                <dt>Serial</dt><dd>@(cert.Serial ?? "-")</dd>
+                <dt>Thumbprint (SHA-256)</dt><dd><code>@(cert.ThumbprintSha256 ?? "-")</code></dd>
+                <dt>Valid</dt><dd>@(cert.NotBeforeUtc is { } from ? ConsoleDisplay.FullTime(from) : "-") to @(cert.NotAfterUtc is { } to ? ConsoleDisplay.FullTime(to) : "-")</dd>
+            }
+            @if (cert.AuthEvaluated)
+            {
+                <dt>Chain</dt><dd>@(cert.ChainResult ?? "-")</dd>
+                <dt>CN allowed</dt><dd>@(cert.CommonNameAllowed is { } allowed ? (allowed ? "yes" : "no") : "-")</dd>
+                <dt>Namespace matched</dt><dd>@(cert.NamespaceMatched is { } matched ? (matched ? "yes" : "no") : "-")</dd>
+                @if (!string.IsNullOrEmpty(cert.AuthFailure))
+                {
+                    <dt>Why rejected</dt><dd data-role="auth-failure">@cert.AuthFailure <span class="detail-note">(internal reason; the client only saw 401)</span></dd>
+                }
+            }
+            else
+            {
+                <dt>Authorization</dt><dd>not evaluated (the exchange was rejected earlier)</dd>
+            }
+        </dl>
+    </div>;
+
+    private RenderFragment BodyPanel(ExchangeRecord record, bool isRequest)
+    {
+        var body = isRequest ? record.Request.Body : record.Response.Body;
+        var revealField = isRequest ? RevealFields.RequestValue : RevealFields.ResponseValue;
+        var headers = isRequest ? record.Request.Headers : record.Response.Headers;
+        return @<div class="detail-section" data-role="@(isRequest ? "tab-request" : "tab-response")">
+            @if (isRequest)
+            {
+                <p class="detail-line"><strong>@record.Request.Method</strong> <code>@(record.Request.RawTarget ?? "-")</code> @(record.Request.HttpVersion)</p>
+            }
+            else
+            {
+                <p class="detail-line"><strong class="@ConsoleDisplay.StatusCss(record.Status)">@ConsoleDisplay.StatusText(record.Status, record.Response.Code)</strong>@(record.Response.ClientAborted ? " (the client went away before the response was written)" : null)</p>
+            }
+
+            <h3>Headers</h3>
+            @if (headers.Count == 0)
+            {
+                <p class="detail-note">No headers captured.</p>
+            }
+            else
+            {
+                <table class="header-table" data-role="headers">
+                    <thead><tr><th scope="col">Name</th><th scope="col">Value</th></tr></thead>
+                    <tbody>
+                        @foreach (var header in headers)
+                        {
+                            <tr><th scope="row">@header.Name</th><td>@header.Value</td></tr>
+                        }
+                    </tbody>
+                </table>
+            }
+
+            <h3>Body <span class="detail-note">(@ConsoleDisplay.Bytes(body.SizeBytes)@(body.Truncated ? ", truncated to the first 16 KiB" : null))</span></h3>
+            @if (!body.Captured)
+            {
+                <p class="detail-note" data-role="body-not-captured">@(body.Note ?? "Not captured.")</p>
+            }
+            else if (string.IsNullOrEmpty(body.Text))
+            {
+                <p class="detail-note">Empty body.</p>
+            }
+            else
+            {
+                @if (body.MaskedFields.Count > 0)
+                {
+                    <ul class="masked-list" data-role="masked-fields">
+                        @foreach (var field in body.MaskedFields)
+                        {
+                            <li>
+                                <span class="masked-name">@field.Field</span>
+                                <span class="masked-value" data-role="masked-value">@ConsoleDisplay.MaskedLabel(field)</span>
+                                @if (field.Revealable && RevealAllowed)
+                                {
+                                    <FluentButton Appearance="Appearance.Neutral"
+                                                  IconStart="@(new Icons.Regular.Size16.Eye())"
+                                                  data-role="reveal"
+                                                  Title="Reveal (audited)"
+                                                  OnClick="() => RevealAsync(revealField)">Reveal</FluentButton>
+                                }
+                            </li>
+                        }
+                    </ul>
+                }
+
+                @if (_revealed is { } revealed && revealed.Field == revealField)
+                {
+                    <div class="revealed" role="status" data-role="revealed">
+                        <p class="detail-note">Revealed for @RevealSeconds s and recorded in the audit log. It is not stored anywhere and not part of any export.</p>
+                        <code class="revealed-value" data-role="revealed-value">@revealed.Value</code>
+                        <FluentButton Appearance="Appearance.Lightweight" data-role="hide-revealed" OnClick="HideRevealed">Hide</FluentButton>
+                    </div>
+                }
+
+                @if (_revealError is { } error)
+                {
+                    <p class="detail-error" role="alert" data-role="reveal-error">@error</p>
+                }
+
+                @if (body.PrettyJson is { } pretty)
+                {
+                    <h4>JSON</h4>
+                    <pre class="code-block" data-role="body-json">@pretty</pre>
+                    <CopyButton Text="@pretty" Title="Copy the JSON (masked)" Confirmation="JSON copied (masked)">Copy JSON</CopyButton>
+                }
+
+                <h4>Raw</h4>
+                <pre class="code-block" data-role="body-raw">@body.Text</pre>
+            }
+        </div>;
+    }
+
+    private RenderFragment TimingPanel(ExchangeRecord record) => @<div class="detail-section" data-role="tab-timing">
+        <svg class="waterfall" viewBox="0 0 640 @(40 + (_segments.Count * 28))" role="img" aria-label="@WaterfallLabel(record)" data-role="waterfall">
+            <title>@WaterfallLabel(record)</title>
+            @foreach (var segment in _segments)
+            {
+                <g data-segment="@segment.Name">
+                    <SvgText Class="chart-axis-label" X="0" Y="@ChartScale.Px(segment.Row * 28 + 28)" Anchor="start">@segment.Name</SvgText>
+                    <rect class="waterfall-bar waterfall-@segment.Css" x="@ChartScale.Px(120 + segment.StartPx)" y="@ChartScale.Px(segment.Row * 28 + 14)" width="@ChartScale.Px(Math.Max(1.5, segment.WidthPx))" height="16" />
+                    <SvgText Class="chart-axis-label" X="@ChartScale.Px(120 + segment.StartPx + Math.Max(1.5, segment.WidthPx) + 6)" Y="@ChartScale.Px(segment.Row * 28 + 27)" Anchor="start">@ConsoleDisplay.Milliseconds(segment.Ms)</SvgText>
+                </g>
+            }
+            <line class="chart-budget" data-role="budget" data-value="@_budgetMs" x1="@ChartScale.Px(120 + _budgetPx)" x2="@ChartScale.Px(120 + _budgetPx)" y1="4" y2="@(36 + (_segments.Count * 28))" />
+            <SvgText Class="chart-budget-label" X="@ChartScale.Px(120 + _budgetPx)" Y="12" Anchor="middle">@_budgetMs ms budget</SvgText>
+        </svg>
+        <table class="header-table" data-role="timing-table">
+            <thead><tr><th scope="col">Stage</th><th scope="col">Time</th></tr></thead>
+            <tbody>
+                <tr><th scope="row">Queue wait</th><td>@ConsoleDisplay.Milliseconds(record.Timing.QueueWaitMs)</td></tr>
+                <tr><th scope="row">Authorization</th><td>@ConsoleDisplay.Milliseconds(record.Timing.AuthMs)</td></tr>
+                <tr><th scope="row">Injected delay</th><td>@ConsoleDisplay.Milliseconds(record.Timing.InjectedDelayMs)</td></tr>
+                <tr><th scope="row">Crypto engine</th><td>@ConsoleDisplay.Milliseconds(record.Timing.CryptoMs)</td></tr>
+                <tr><th scope="row">Total (server time)</th><td><span class="@ConsoleDisplay.BudgetCss(record.Timing.Budget)">@ConsoleDisplay.Milliseconds(record.Timing.TotalMs) (@ConsoleDisplay.BudgetWord(record.Timing.Budget))</span></td></tr>
+            </tbody>
+        </table>
+    </div>;
+}

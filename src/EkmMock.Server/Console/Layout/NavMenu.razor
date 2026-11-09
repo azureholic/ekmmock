@@ -1,0 +1,32 @@
+@inject IOptions<ConsoleOptions> Options
+
+<FluentNavMenu Id="console-nav-menu" Width="230" Title="Console sections" Collapsible="false">
+    <FluentNavLink Href="/" Match="NavLinkMatch.All" Icon="@(new Icons.Regular.Size20.Pulse())" data-nav="live">Live traffic</FluentNavLink>
+    <FluentNavLink Href="/connections" Icon="@(new Icons.Regular.Size20.PlugConnected())" data-nav="connections">Connections</FluentNavLink>
+    <FluentNavLink Href="/dashboard" Icon="@(new Icons.Regular.Size20.DataBarVertical())" data-nav="dashboard">Dashboard</FluentNavLink>
+
+    @if (Options.Value.ShowPlaceholderNavigation)
+    {
+        @* Not built yet: shown so that the shape of the console is visible, but they do nothing (no fake functionality). *@
+        <FluentDivider Class="nav-divider" />
+        @foreach (var item in Placeholders)
+        {
+            <FluentNavLink Disabled="true" Icon="@item.Icon" Tooltip="@($"Coming in {item.Milestone}")" data-nav-placeholder="@item.Milestone">@item.Title <span class="nav-soon" aria-hidden="true">· @item.Milestone</span><span class="visually-hidden"> (coming in @item.Milestone)</span></FluentNavLink>
+        }
+    }
+</FluentNavMenu>
+
+@code {
+    private sealed record Placeholder(string Title, string Milestone, Icon Icon);
+
+    private static readonly Placeholder[] Placeholders =
+    [
+        new("Keys", "M6", new Icons.Regular.Size20.Key()),
+        new("Namespaces & trust", "M6", new Icons.Regular.Size20.PeopleCommunity()),
+        new("Certificates", "M6", new Icons.Regular.Size20.Certificate()),
+        new("Playground", "M6", new Icons.Regular.Size20.Beaker()),
+        new("Fault injection", "M7", new Icons.Regular.Size20.Flash()),
+        new("Audit log", "M6", new Icons.Regular.Size20.History()),
+        new("About", "M6", new Icons.Regular.Size20.Info()),
+    ];
+}

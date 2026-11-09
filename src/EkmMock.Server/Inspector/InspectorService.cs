@@ -257,6 +257,8 @@ internal interface IInspector : IInspectorQuery
 
 internal sealed class InspectorService : IInspector
 {
+    private static readonly byte[] NewLine = [(byte)'\n'];
+
     private readonly ExchangeRingBuffer _ring;
     private readonly DashboardAggregator _dashboard;
     private readonly ConnectionStatsStage _connectionStats;
@@ -508,7 +510,8 @@ internal sealed class InspectorService : IInspector
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 await destination.WriteAsync(JsonSerializer.SerializeToUtf8Bytes(record, InspectorJsonContext.Default.ExchangeRecord), cancellationToken).ConfigureAwait(false);
-                destination.WriteByte((byte)'\n');
+                // Async write: the destination can be an HTTP response body, which does not allow synchronous I/O.
+                await destination.WriteAsync(NewLine, cancellationToken).ConfigureAwait(false);
             }
 
             await destination.FlushAsync(cancellationToken).ConfigureAwait(false);
@@ -523,7 +526,11 @@ internal sealed class InspectorService : IInspector
         writer.WriteStartArray("exchanges");
         foreach (var record in records)
         {
-            JsonSerializer.Serialize(writer, record, InspectorJsonContext.Default.ExchangeRecord);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // Serialize to bytes first: the source-generated serializer may flush a Utf8JsonWriter synchronously, which an HTTP response body (the console export) does not allow.
+            writer.WriteRawValue(JsonSerializer.SerializeToUtf8Bytes(record, InspectorJsonContext.Default.ExchangeRecord), skipInputValidation: true);
+            await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
         }
 
         writer.WriteEndArray();

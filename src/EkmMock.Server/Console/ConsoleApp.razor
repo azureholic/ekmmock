@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="referrer" content="no-referrer" />
+    <link rel="icon" href="data:," />
+    <base href="/" />
+    <title>EkmMock console</title>
+    @* No <ImportMap />: it renders an inline script, which the console's CSP (script-src 'self', no 'unsafe-inline') refuses. The Fluent UI modules are imported by their plain URLs. *@
+    <link rel="stylesheet" href="@Assets["EkmMock.Server.styles.css"]" />
+    <link rel="stylesheet" href="@Assets["console.css"]" />
+    <HeadOutlet @rendermode="NoPrerender" />
+</head>
+<body>
+    <Routes @rendermode="NoPrerender" />
+
+    @* Shown by blazor.web.js when the circuit connection drops (the script toggles the components-reconnect-* classes on this element). *@
+    <div id="components-reconnect-modal" class="reconnect-modal" role="alertdialog" aria-live="assertive" aria-labelledby="reconnect-title" tabindex="-1">
+        <div class="reconnect-modal-body">
+            <strong id="reconnect-title" class="reconnect-title">Connection to the console lost</strong>
+            <span class="reconnect-state reconnect-state-show">Trying to reconnect. Live updates are paused until the connection is back.</span>
+            <span class="reconnect-state reconnect-state-retrying">Still trying to reconnect...</span>
+            <span class="reconnect-state reconnect-state-failed">Could not reconnect. The server may have restarted.</span>
+            <span class="reconnect-state reconnect-state-rejected">The session ended. Reload to start a new one.</span>
+            <button type="button" class="reconnect-button" data-reload="true">Reload page</button>
+        </div>
+    </div>
+
+    <script src="@Assets["_framework/blazor.web.js"]"></script>
+    <script src="@Assets["console.js"]"></script>
+</body>
+</html>
+
+@code {
+    // No prerendering: the console is a live view behind a circuit. Prerendering would build every page twice and subscribe to the live feed during the static pass.
+    private static readonly IComponentRenderMode NoPrerender = new InteractiveServerRenderMode(prerender: false);
+}

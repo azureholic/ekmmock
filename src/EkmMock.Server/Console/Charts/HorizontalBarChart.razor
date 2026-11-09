@@ -1,0 +1,37 @@
+<figure class="chart bar-chart" data-chart="horizontal-bars">
+    <figcaption class="chart-title">@Title</figcaption>
+    @if (Bars.Count == 0 || Bars.All(static b => b.Value <= 0))
+    {
+        <p class="chart-empty" data-role="empty">@EmptyText</p>
+    }
+    else
+    {
+        <ul class="bar-list" role="list" aria-label="@Title">
+            @foreach (var bar in Bars)
+            {
+                <li class="bar-row" data-label="@bar.Label" title="@(bar.Detail ?? bar.Label)">
+                    <span class="bar-label">@bar.Label</span>
+                    <svg class="bar-track" viewBox="0 0 100 10" preserveAspectRatio="none" aria-hidden="true">
+                        <rect class="bar-fill @bar.CssClass" data-role="bar" x="0" y="0" width="@ChartScale.Px(Share(bar))" height="10" />
+                    </svg>
+                    <span class="bar-value" data-role="bar-value">@ChartScale.Format(bar.Value)</span>
+                </li>
+            }
+        </ul>
+    }
+</figure>
+
+@code {
+    private double _max = 1;
+
+    [Parameter] public IReadOnlyList<BarDatum> Bars { get; set; } = [];
+
+    [Parameter] public string Title { get; set; } = "Errors by code";
+
+    [Parameter] public string EmptyText { get; set; } = "No errors in this window.";
+
+    protected override void OnParametersSet() => _max = Bars.Count == 0 ? 1 : Math.Max(1, Bars.Max(static b => b.Value));
+
+    /// <summary>The bar's width in percent of the track (a non-zero value is always at least visible).</summary>
+    private double Share(BarDatum bar) => bar.Value <= 0 ? 0 : Math.Max(2, bar.Value / _max * 100);
+}

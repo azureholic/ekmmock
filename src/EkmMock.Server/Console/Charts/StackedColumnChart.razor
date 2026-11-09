@@ -1,0 +1,93 @@
+<figure class="chart column-chart" data-chart="stacked-columns">
+    <figcaption class="chart-title">@Title</figcaption>
+    @if (!HasData)
+    {
+        <p class="chart-empty" data-role="empty">@EmptyText</p>
+    }
+    else
+    {
+        <svg class="chart-svg" viewBox="0 0 @Width @Height" role="img" aria-label="@AriaLabel" preserveAspectRatio="xMidYMid meet">
+            <title>@Title</title>
+            @foreach (var tick in _yTicks)
+            {
+                var y = ChartScale.Px(Y(tick));
+                <line class="chart-grid" data-role="y-grid" x1="@Left" x2="@Right" y1="@y" y2="@y" />
+                <SvgText Class="chart-axis-label" data-role="y-tick" X="@ChartScale.Px(Left - 6)" Y="@ChartScale.Px(Y(tick) + 4)" Anchor="end">@ChartScale.Format(tick)</SvgText>
+            }
+            <line class="chart-axis" data-role="y-axis" x1="@Left" x2="@Left" y1="@Top" y2="@Bottom" />
+            <line class="chart-axis" data-role="x-axis" x1="@Left" x2="@Right" y1="@Bottom" y2="@Bottom" />
+            <SvgText Class="chart-axis-label" data-role="y-unit" X="@ChartScale.Px(Left)" Y="@ChartScale.Px(Top - 2)" Anchor="start">@YUnit</SvgText>
+            @for (var i = 0; i < Columns.Count; i++)
+            {
+                var column = Columns[i];
+                var x = Left + (i * _slot) + (_slot * 0.12);
+                var cumulative = 0d;
+                <g class="chart-column" data-label="@column.Label">
+                    <title>@ColumnTitle(column)</title>
+                    @foreach (var segment in column.Segments.Where(static s => s.Value > 0))
+                    {
+                        var top = Y(cumulative + segment.Value);
+                        var height = Y(cumulative) - top;
+                        cumulative += segment.Value;
+                        <rect class="chart-bar series-fill-@(segment.Index % 6)" data-series="@segment.Name" data-value="@ChartScale.Format(segment.Value)" x="@ChartScale.Px(x)" y="@ChartScale.Px(top)" width="@ChartScale.Px(_slot * 0.76)" height="@ChartScale.Px(height)" />
+                    }
+                </g>
+                @if (i % _labelEvery == 0)
+                {
+                    <SvgText Class="chart-axis-label" data-role="x-tick" X="@ChartScale.Px(x + (_slot * 0.38))" Y="@ChartScale.Px(Bottom + 16)" Anchor="middle">@column.Label</SvgText>
+                }
+            }
+        </svg>
+        <ul class="chart-legend" data-role="legend">
+            @foreach (var series in LegendSeries)
+            {
+                <li><svg class="legend-swatch series-fill-@(series.Index % 6)" width="14" height="14" aria-hidden="true"><rect width="14" height="14" /></svg> @series.Name</li>
+            }
+        </ul>
+    }
+</figure>
+
+@code {
+    private const double Width = 640;
+    private const double Height = 220;
+    private const double Left = 40;
+    private const double Right = 624;
+    private const double Top = 16;
+    private const double Bottom = 188;
+
+    private double _yMax = 1;
+    private double _slot = 1;
+    private int _labelEvery = 1;
+    private IReadOnlyList<double> _yTicks = [];
+
+    [Parameter] public IReadOnlyList<StackedColumn> Columns { get; set; } = [];
+
+    [Parameter] public string Title { get; set; } = "Requests per minute";
+
+    [Parameter] public string YUnit { get; set; } = "requests";
+
+    [Parameter] public string EmptyText { get; set; } = "No requests in this window yet.";
+
+    private bool HasData => Columns.Any(static c => c.Segments.Any(static s => s.Value > 0));
+
+    private IEnumerable<ChartSegment> LegendSeries => Columns.SelectMany(static c => c.Segments).GroupBy(static s => s.Name).Select(static g => g.First()).OrderBy(static s => s.Index);
+
+    private string AriaLabel => $"{Title}: " + string.Join("; ", LegendSeries.Select(s => $"{s.Name} {ChartScale.Format(Columns.Sum(c => c.Segments.Where(x => x.Name == s.Name).Sum(x => x.Value)))} in total"));
+
+    protected override void OnParametersSet()
+    {
+        if (Columns.Count == 0)
+        {
+            return;
+        }
+
+        (_yMax, _yTicks) = ChartScale.CountAxis(Columns.Max(static c => c.Segments.Sum(static s => s.Value)));
+        _slot = (Right - Left) / Columns.Count;
+        _labelEvery = Math.Max(1, (int)Math.Ceiling(Columns.Count / 8d));
+    }
+
+    private double Y(double value) => Bottom - ((Bottom - Top) * Math.Clamp(value / _yMax, 0, 1));
+
+    private static string ColumnTitle(StackedColumn column)
+        => $"{column.Label}: " + string.Join(", ", column.Segments.Where(static s => s.Value > 0).Select(static s => $"{s.Name} {ChartScale.Format(s.Value)}"));
+}

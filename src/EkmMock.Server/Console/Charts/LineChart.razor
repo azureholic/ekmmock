@@ -1,0 +1,115 @@
+<figure class="chart line-chart" data-chart="line">
+    <figcaption class="chart-title">@Title</figcaption>
+    @if (!HasData)
+    {
+        <p class="chart-empty" data-role="empty">@EmptyText</p>
+    }
+    else
+    {
+        <svg class="chart-svg" viewBox="0 0 @Width @Height" role="img" aria-label="@AriaLabel" preserveAspectRatio="xMidYMid meet">
+            <title>@Title</title>
+            @foreach (var tick in _yTicks)
+            {
+                var y = ChartScale.Px(Y(tick));
+                <line class="chart-grid" data-role="y-grid" x1="@Left" x2="@Right" y1="@y" y2="@y" />
+                <SvgText Class="chart-axis-label" data-role="y-tick" X="@ChartScale.Px(Left - 6)" Y="@ChartScale.Px(Y(tick) + 4)" Anchor="end">@ChartScale.Format(tick)</SvgText>
+            }
+            <line class="chart-axis" data-role="y-axis" x1="@Left" x2="@Left" y1="@Top" y2="@Bottom" />
+            <line class="chart-axis" data-role="x-axis" x1="@Left" x2="@Right" y1="@Bottom" y2="@Bottom" />
+            <SvgText Class="chart-axis-label" data-role="y-unit" X="@ChartScale.Px(Left)" Y="@ChartScale.Px(Top - 2)" Anchor="start">@YUnit</SvgText>
+            @foreach (var tick in _xTicks)
+            {
+                <SvgText Class="chart-axis-label" data-role="x-tick" X="@ChartScale.Px(X(tick))" Y="@ChartScale.Px(Bottom + 16)" Anchor="middle">@tick.UtcDateTime.ToString("HH:mm", CultureInfo.InvariantCulture)</SvgText>
+            }
+            @if (BudgetLine is { } budget)
+            {
+                <line class="chart-budget" data-role="budget" data-value="@ChartScale.Format(budget)" x1="@Left" x2="@Right" y1="@ChartScale.Px(Y(budget))" y2="@ChartScale.Px(Y(budget))" />
+                <SvgText Class="chart-budget-label" data-role="budget-label" X="@ChartScale.Px(Right)" Y="@ChartScale.Px(Y(budget) - 4)" Anchor="end">@BudgetLabel</SvgText>
+            }
+            @foreach (var series in Series.Where(static s => s.Points.Count > 0))
+            {
+                <polyline class="chart-series series-@(series.Index % 6)" data-series="@series.Name" fill="none" points="@PointsOf(series)" />
+                var last = series.Points[^1];
+                <circle class="chart-marker series-@(series.Index % 6)" data-series="@series.Name" cx="@ChartScale.Px(X(last.X))" cy="@ChartScale.Px(Y(last.Y))" r="3.5" />
+            }
+        </svg>
+        <ul class="chart-legend" data-role="legend">
+            @foreach (var series in Series.Where(static s => s.Points.Count > 0))
+            {
+                <li><svg class="legend-swatch series-@(series.Index % 6)" width="28" height="10" aria-hidden="true"><line x1="0" x2="28" y1="5" y2="5" /></svg> @series.Name</li>
+            }
+            @if (BudgetLine is not null)
+            {
+                <li><svg class="legend-swatch chart-budget" width="28" height="10" aria-hidden="true"><line x1="0" x2="28" y1="5" y2="5" /></svg> @BudgetLabel</li>
+            }
+        </ul>
+    }
+</figure>
+
+@code {
+    private const double Width = 640;
+    private const double Height = 260;
+    private const double Left = 52;
+    private const double Right = 624;
+    private const double Top = 16;
+    private const double Bottom = 228;
+
+    private double _yMax = 1;
+    private DateTimeOffset _xMin;
+    private DateTimeOffset _xMax;
+    private IReadOnlyList<double> _yTicks = [];
+    private IReadOnlyList<DateTimeOffset> _xTicks = [];
+
+    /// <summary>The lines to draw. A series without points is not drawn.</summary>
+    [Parameter] public IReadOnlyList<ChartSeries> Series { get; set; } = [];
+
+    /// <summary>A horizontal reference line (the 250 ms latency budget). The y axis always reaches above it.</summary>
+    [Parameter] public double? BudgetLine { get; set; }
+
+    [Parameter] public string BudgetLabel { get; set; } = "250 ms budget";
+
+    [Parameter] public string Title { get; set; } = "Chart";
+
+    [Parameter] public string YUnit { get; set; } = "ms";
+
+    [Parameter] public string EmptyText { get; set; } = "No data in this window yet.";
+
+    /// <summary>Fixes the left edge of the time axis (for example "15 minutes ago"); default is the first point.</summary>
+    [Parameter] public DateTimeOffset? XMin { get; set; }
+
+    /// <summary>Fixes the right edge of the time axis; default is the last point.</summary>
+    [Parameter] public DateTimeOffset? XMax { get; set; }
+
+    private bool HasData => Series.Any(static s => s.Points.Count > 0);
+
+    private string AriaLabel => $"{Title}: " + string.Join("; ", Series.Where(static s => s.Points.Count > 0).Select(static s => $"{s.Name} latest {ChartScale.Format(s.Points[^1].Y)}"));
+
+    protected override void OnParametersSet()
+    {
+        var points = Series.SelectMany(static s => s.Points).ToList();
+        if (points.Count == 0)
+        {
+            return;
+        }
+
+        _yMax = ChartScale.YMax(points.Max(static p => p.Y), BudgetLine);
+        _yTicks = ChartScale.Ticks(_yMax);
+        _xMin = XMin ?? points.Min(static p => p.X);
+        _xMax = XMax ?? points.Max(static p => p.X);
+        if (_xMax <= _xMin)
+        {
+            _xMax = _xMin.AddMinutes(1);
+        }
+
+        var span = _xMax - _xMin;
+        _xTicks = [.. Enumerable.Range(0, 5).Select(i => _xMin + (span * i / 4))];
+    }
+
+    private double Y(double value) => Bottom - ((Bottom - Top) * Math.Clamp(value / _yMax, 0, 1));
+
+    private double X(DateTimeOffset value)
+        => Left + ((Right - Left) * Math.Clamp((value - _xMin).TotalSeconds / (_xMax - _xMin).TotalSeconds, 0, 1));
+
+    private string PointsOf(ChartSeries series)
+        => string.Join(' ', series.Points.OrderBy(static p => p.X).Select(p => $"{ChartScale.Px(X(p.X))},{ChartScale.Px(Y(p.Y))}"));
+}

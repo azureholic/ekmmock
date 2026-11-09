@@ -1,0 +1,93 @@
+@implements IDisposable
+@inject TimeProvider Time
+
+@* The Managed HSM heartbeat (spec 8.5): the last info call, red when it is older than 60 s. The age ticks once per second from the clock; nothing is queried. *@
+<section class="heartbeat @StateCss" data-role="heartbeat" data-state="@StateName" aria-labelledby="heartbeat-title">
+    <h2 id="heartbeat-title" class="card-title">Managed HSM heartbeat</h2>
+    <p class="heartbeat-state" data-role="heartbeat-state" role="status">
+        <FluentIcon Value="@Icon" Color="@IconColor" />
+        <strong>@StateWord</strong>
+    </p>
+    <p class="heartbeat-detail" data-role="heartbeat-detail">@Detail</p>
+</section>
+
+@code {
+    private ITimer? _timer;
+    private bool _disposed;
+
+    /// <summary>When the last <c>info</c> call arrived (UTC); null when none has been seen since the start.</summary>
+    [Parameter] public DateTimeOffset? LastInfoAtUtc { get; set; }
+
+    /// <summary>The CN of the client certificate of that call, if it had one.</summary>
+    [Parameter] public string? ClientCommonName { get; set; }
+
+    /// <summary>The HTTP status of that call.</summary>
+    [Parameter] public int? Status { get; set; }
+
+    /// <summary>Older than this is stale (red). Spec 8.5: 60 seconds.</summary>
+    [Parameter] public TimeSpan StaleAfter { get; set; } = TimeSpan.FromSeconds(60);
+
+    private TimeSpan? Age => LastInfoAtUtc is { } at ? Max(TimeSpan.Zero, Time.GetUtcNow() - at) : null;
+
+    private bool IsStale => Age is not { } age || age > StaleAfter;
+
+    private string StateName => LastInfoAtUtc is null ? "never" : IsStale ? "stale" : "ok";
+
+    private string StateCss => StateName switch { "ok" => "heartbeat-ok", "stale" => "heartbeat-stale", _ => "heartbeat-never" };
+
+    private string StateWord => StateName switch { "ok" => "Healthy", "stale" => "Stale: no recent probe", _ => "No info call seen yet" };
+
+    private Icon Icon => StateName == "ok" ? new Icons.Filled.Size20.CheckmarkCircle() : new Icons.Filled.Size20.ErrorCircle();
+
+    private Color IconColor => StateName == "ok" ? Color.Success : Color.Error;
+
+    private string Detail
+    {
+        get
+        {
+            if (Age is not { } age)
+            {
+                return "Managed HSM probes the endpoint with info about three times a minute. Nothing has arrived yet.";
+            }
+
+            var from = string.IsNullOrEmpty(ClientCommonName) ? "an unidentified client" : $"CN {ClientCommonName}";
+            var status = Status is int s && (s < 200 || s >= 300) ? $" (answered {s})" : string.Empty;
+            return $"Last info call {AgeText(age)} from {from}{status}.";
+        }
+    }
+
+    private static TimeSpan Max(TimeSpan a, TimeSpan b) => a > b ? a : b;
+
+    /// <summary>"14 s ago", "2 min 5 s ago".</summary>
+    internal static string AgeText(TimeSpan age)
+        => age.TotalSeconds < 60
+            ? $"{(int)age.TotalSeconds} s ago"
+            : age.TotalMinutes < 60
+                ? $"{(int)age.TotalMinutes} min {age.Seconds} s ago"
+                : $"{(int)age.TotalHours} h {age.Minutes} min ago";
+
+    protected override void OnInitialized()
+        => _timer = Time.CreateTimer(_ => Tick(), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+
+    private void Tick()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _ = InvokeAsync(() =>
+        {
+            if (!_disposed)
+            {
+                StateHasChanged();
+            }
+        });
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        _timer?.Dispose();
+    }
+}

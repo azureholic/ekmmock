@@ -1,0 +1,128 @@
+<div class="console-tabs" data-role="tabs">
+    <div class="tab-list" role="tablist" aria-label="@Label" @onkeydown="OnKeyDownAsync">
+        @for (var i = 0; i < Tabs.Count; i++)
+        {
+            var tab = Tabs[i];
+            var index = i;
+            var selected = tab.Id == _active;
+            <button type="button"
+                    role="tab"
+                    id="@TabId(tab)"
+                    class="tab-button @(selected ? "tab-selected" : null)"
+                    aria-selected="@(selected ? "true" : "false")"
+                    aria-controls="@PanelId(tab)"
+                    tabindex="@(selected ? 0 : -1)"
+                    data-tab="@tab.Id"
+                    @ref="_buttons[index]"
+                    @onclick="() => SelectAsync(tab.Id, focus: false)">@tab.Title</button>
+        }
+    </div>
+    @foreach (var tab in Tabs.Where(t => t.Id == _active))
+    {
+        <div role="tabpanel" id="@PanelId(tab)" class="tab-panel" aria-labelledby="@TabId(tab)" tabindex="0" data-panel="@tab.Id">
+            @Panel?.Invoke(tab.Id)
+        </div>
+    }
+</div>
+
+@code {
+    private string _active = string.Empty;
+    private ElementReference[] _buttons = [];
+    private string? _focusAfterRender;
+
+    [Parameter, EditorRequired] public IReadOnlyList<TabDefinition> Tabs { get; set; } = [];
+
+    /// <summary>Accessible name of the tab list.</summary>
+    [Parameter] public string Label { get; set; } = "Sections";
+
+    [Parameter] public string? ActiveId { get; set; }
+
+    [Parameter] public EventCallback<string> ActiveIdChanged { get; set; }
+
+    /// <summary>Renders the panel of the active tab (only that panel is in the page).</summary>
+    [Parameter] public RenderFragment<string>? Panel { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        if (_buttons.Length != Tabs.Count)
+        {
+            _buttons = new ElementReference[Tabs.Count];
+        }
+
+        _active = ActiveId is not null && Tabs.Any(t => t.Id == ActiveId)
+            ? ActiveId
+            : Tabs.Any(t => t.Id == _active) ? _active : Tabs.Count > 0 ? Tabs[0].Id : string.Empty;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_focusAfterRender is { } id)
+        {
+            _focusAfterRender = null;
+            var index = IndexOf(id);
+            if (index >= 0)
+            {
+                try
+                {
+                    await _buttons[index].FocusAsync();
+                }
+                catch (Exception exception) when (exception is JSException or InvalidOperationException or JSDisconnectedException)
+                {
+                    // Focus is a nicety.
+                }
+            }
+        }
+    }
+
+    private async Task SelectAsync(string id, bool focus)
+    {
+        if (id == _active)
+        {
+            return;
+        }
+
+        _active = id;
+        _focusAfterRender = focus ? id : null;
+        await ActiveIdChanged.InvokeAsync(id);
+    }
+
+    // The WAI-ARIA tabs pattern: Left/Right move between tabs (wrapping), Home/End jump to the first/last one.
+    private async Task OnKeyDownAsync(KeyboardEventArgs e)
+    {
+        if (Tabs.Count == 0)
+        {
+            return;
+        }
+
+        var current = Math.Max(0, IndexOf(_active));
+        var next = e.Key switch
+        {
+            "ArrowRight" => (current + 1) % Tabs.Count,
+            "ArrowLeft" => (current - 1 + Tabs.Count) % Tabs.Count,
+            "Home" => 0,
+            "End" => Tabs.Count - 1,
+            _ => -1,
+        };
+        if (next >= 0)
+        {
+            await SelectAsync(Tabs[next].Id, focus: true);
+        }
+    }
+
+    private int IndexOf(string id)
+    {
+        for (var i = 0; i < Tabs.Count; i++)
+        {
+            if (Tabs[i].Id == id)
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private string TabId(TabDefinition tab) => $"tab-{tab.Id}";
+
+    private string PanelId(TabDefinition tab) => $"panel-{tab.Id}";
+}

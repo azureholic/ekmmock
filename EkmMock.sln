@@ -19,6 +19,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EkmMock.Pki", "src\EkmMock.
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EkmMock.TestSupport", "tests\EkmMock.TestSupport\EkmMock.TestSupport.csproj", "{B8EC3648-A72D-4B46-9A58-B27115D9869F}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EkmMock.Console.Tests", "tests\EkmMock.Console.Tests\EkmMock.Console.Tests.csproj", "{833F0320-3954-4B12-8374-C59134009C6F}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -101,6 +103,18 @@ Global
 		{B8EC3648-A72D-4B46-9A58-B27115D9869F}.Release|x64.Build.0 = Release|Any CPU
 		{B8EC3648-A72D-4B46-9A58-B27115D9869F}.Release|x86.ActiveCfg = Release|Any CPU
 		{B8EC3648-A72D-4B46-9A58-B27115D9869F}.Release|x86.Build.0 = Release|Any CPU
+		{833F0320-3954-4B12-8374-C59134009C6F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{833F0320-3954-4B12-8374-C59134009C6F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{833F0320-3954-4B12-8374-C59134009C6F}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{833F0320-3954-4B12-8374-C59134009C6F}.Debug|x64.Build.0 = Debug|Any CPU
+		{833F0320-3954-4B12-8374-C59134009C6F}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{833F0320-3954-4B12-8374-C59134009C6F}.Debug|x86.Build.0 = Debug|Any CPU
+		{833F0320-3954-4B12-8374-C59134009C6F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{833F0320-3954-4B12-8374-C59134009C6F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{833F0320-3954-4B12-8374-C59134009C6F}.Release|x64.ActiveCfg = Release|Any CPU
+		{833F0320-3954-4B12-8374-C59134009C6F}.Release|x64.Build.0 = Release|Any CPU
+		{833F0320-3954-4B12-8374-C59134009C6F}.Release|x86.ActiveCfg = Release|Any CPU
+		{833F0320-3954-4B12-8374-C59134009C6F}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -112,5 +126,6 @@ Global
 		{6075D359-C299-4CB5-82FF-263B6C053503} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{1C91A92C-0FC4-4D3B-9339-8209754C6E73} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{B8EC3648-A72D-4B46-9A58-B27115D9869F} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{833F0320-3954-4B12-8374-C59134009C6F} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 EndGlobal

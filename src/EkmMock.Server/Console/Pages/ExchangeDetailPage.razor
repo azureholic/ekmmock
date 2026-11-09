@@ -1,0 +1,12 @@
+@page "/exchange/{Id:long}"
+
+<PageTitle>Exchange @Id - EkmMock console</PageTitle>
+
+<h1 tabindex="-1">Exchange @Id</h1>
+<p><a href="/" data-role="back-to-live">Back to Live traffic</a></p>
+
+<ExchangeDetailView ExchangeId="Id" />
+
+@code {
+    [Parameter] public long Id { get; set; }
+}

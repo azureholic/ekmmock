@@ -3,6 +3,7 @@ using EkmMock.Server.Connections;
 using EkmMock.Server.Ekm;
 using EkmMock.Server.Inspector;
 using EkmMock.Server.Tls;
+using EkmMock.Server.WebConsole;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
@@ -54,6 +55,9 @@ internal static class EkmServerServiceCollectionExtensions
         var builder = WebApplication.CreateBuilder(args);
         builder.AddEkmMockServer(args);
         customize?.Invoke(builder);
+
+        // After the customization, so the final configuration decides: refuses to start with an unsafe console configuration (spec 5.4) and registers the auth mode.
+        builder.AddEkmConsole();
         var app = builder.Build();
         app.UseEkmPipeline();
         return app;
@@ -158,6 +162,9 @@ internal static class EkmServerServiceCollectionExtensions
         services.TryAddSingleton<EkmHandlers>();
         services.TryAddSingleton<EkmDispatcher>();
         services.AddHostedService<EkmStartupService>();
+
+        // ---- Web console (M5, spec 5.4, 7, 8.5) ----
+        services.AddEkmConsoleServices();
         return services;
     }
 }

@@ -1,0 +1,190 @@
+@page "/connections"
+@using EkmMock.Server.Inspector
+@implements IAsyncDisposable
+@inject IInspector Inspector
+@inject TimeProvider Time
+
+<PageTitle>Connections - EkmMock console</PageTitle>
+
+<h1 tabindex="-1">Connections</h1>
+<p class="page-intro">TLS connections to the EKM endpoint, including the ones that failed the handshake before any HTTP request existed. Updates live.</p>
+
+<section class="dashboard-card" aria-labelledby="conn-stats-title" data-role="connection-statistics">
+    <h2 id="conn-stats-title" class="card-title">Statistics since start</h2>
+    <dl class="stat-list">
+        <dt>Open now</dt><dd data-role="open-now">@_stats.OpenNow</dd>
+        <dt>Opened</dt><dd data-role="opened">@_stats.Opened</dd>
+        <dt>Handshakes succeeded</dt><dd data-role="handshakes-ok">@_stats.HandshakesSucceeded</dd>
+        <dt>Handshakes failed</dt><dd data-role="handshakes-failed" class="@(_stats.HandshakesFailed > 0 ? "status-server" : null)">@_stats.HandshakesFailed</dd>
+        <dt>Closed</dt><dd data-role="closed">@_stats.Closed</dd>
+        <dt>Requests per closed connection</dt><dd data-role="avg-requests">@_stats.AverageRequestsPerClosedConnection.ToString("0.0", CultureInfo.InvariantCulture)</dd>
+        <dt>TLS resumption rate</dt>
+        <dd data-role="resumption-rate">@ConsoleDisplay.Percent(_stats.ResumptionRate) <span class="detail-note">(TLS session resumption is switched off on purpose: every connection gets a full handshake, so the client certificate is always validated)</span></dd>
+    </dl>
+    @if (_stats.FailuresByReason.Count > 0)
+    {
+        <h3>Failed handshakes by reason</h3>
+        <ul class="reason-list" data-role="failure-reasons">
+            @foreach (var (reason, count) in _stats.FailuresByReason.OrderByDescending(static r => r.Value))
+            {
+                <li><code>@reason</code>: @count</li>
+            }
+        </ul>
+    }
+</section>
+
+<section class="dashboard-card" aria-labelledby="open-title" data-role="open-connections">
+    <h2 id="open-title" class="card-title">Open connections (@_open.Count)</h2>
+    @if (_open.Count == 0)
+    {
+        <p class="chart-empty" data-role="open-empty">No open connections.</p>
+    }
+    else
+    {
+        <FluentDataGrid Items="@_open.AsQueryable()" TGridItem="OpenConnectionInfo" ResizableColumns="false" GridTemplateColumns="1.4fr 0.7fr 0.8fr 1fr 1.6fr 0.6fr 1fr 1.6fr">
+            <PropertyColumn Property="@(c => c.RemoteEndPoint)" Title="Remote" />
+            <TemplateColumn Title="Age" Tooltip="true"><span>@ConsoleDisplay.Duration(context.AgeMs)</span></TemplateColumn>
+            <PropertyColumn Property="@(c => c.RequestCount)" Title="Requests" />
+            <PropertyColumn Property="@(c => c.TlsProtocol)" Title="TLS" />
+            <PropertyColumn Property="@(c => c.CipherSuite)" Title="Cipher suite" />
+            <PropertyColumn Property="@(c => c.Alpn)" Title="ALPN" />
+            <PropertyColumn Property="@(c => c.Sni)" Title="SNI" />
+            <PropertyColumn Property="@(c => c.ClientCertificateSubject)" Title="Client certificate" />
+        </FluentDataGrid>
+    }
+</section>
+
+<section class="dashboard-card" aria-labelledby="events-title" data-role="connection-events">
+    <h2 id="events-title" class="card-title">Connection events</h2>
+    <FluentSwitch Value="_failuresOnly" ValueChanged="OnFailuresOnlyChanged" Label="Failed handshakes only" data-role="failures-only" />
+    @if (_events.Count == 0)
+    {
+        <p class="chart-empty" data-role="events-empty">No connection events yet.</p>
+    }
+    else
+    {
+        <table class="header-table events-table" data-role="events-table">
+            <thead><tr><th scope="col">Time (UTC)</th><th scope="col">Event</th><th scope="col">Connection</th><th scope="col">Remote</th><th scope="col">What happened</th></tr></thead>
+            <tbody>
+                @foreach (var e in _events)
+                {
+                    <tr data-event-kind="@e.Kind" data-connection="@e.ConnectionId" class="@(e.Kind == "handshake_failed" ? "connection-failed" : null)" @key="e.Sequence">
+                        <td title="@ConsoleDisplay.FullTime(e.AtUtc)">@ConsoleDisplay.Time(e.AtUtc)</td>
+                        <td>@KindWord(e.Kind)</td>
+                        <td><code>@ConsoleDisplay.ShortId(e.ConnectionId)</code></td>
+                        <td>@(e.RemoteEndPoint ?? "-")</td>
+                        <td>@ConsoleDisplay.ConnectionSummary(e)@(e.FailureDetail is { Length: > 0 } detail ? $" ({detail})" : null)</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+</section>
+
+@code {
+    private const int EventLimit = 200;
+    private const int OpenRefreshSeconds = 1;
+
+    private readonly CancellationTokenSource _stop = new();
+    private InspectorSubscription? _subscription;
+    private Task _pump = Task.CompletedTask;
+    private ITimer? _timer;
+    private bool _disposed;
+    private bool _failuresOnly;
+    private ConnectionStatistics _stats = default!;
+    private IReadOnlyList<OpenConnectionInfo> _open = [];
+    private IReadOnlyList<ConnectionEventRecord> _events = [];
+
+    protected override void OnInitialized()
+    {
+        Reload();
+
+        // Connection events arrive through the live feed (no exchanges: this page does not need them); open connection counters change with every request, so they
+        // are refreshed once per second as well.
+        _subscription = Inspector.Feed.Subscribe(new InspectorSubscriptionOptions { IncludeExchanges = false, IncludeConnectionEvents = true });
+        _pump = Task.Run(() => PumpAsync(_stop.Token));
+        _timer = Time.CreateTimer(_ => Refresh(), null, TimeSpan.FromSeconds(OpenRefreshSeconds), TimeSpan.FromSeconds(OpenRefreshSeconds));
+    }
+
+    private async Task PumpAsync(CancellationToken cancellationToken)
+    {
+        var reader = _subscription!.Reader;
+        try
+        {
+            while (await reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                while (reader.TryRead(out _))
+                {
+                }
+
+                Refresh();
+
+                // Coalesce: a burst of events (a port scan) renders once per interval.
+                await Task.Delay(TimeSpan.FromMilliseconds(150), Time, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // The page was left.
+        }
+    }
+
+    private void Refresh()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _ = InvokeAsync(() =>
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            Reload();
+            StateHasChanged();
+        });
+    }
+
+    private void Reload()
+    {
+        _stats = Inspector.ConnectionStatistics();
+        _open = Inspector.OpenConnections();
+        _events = Inspector.ConnectionEvents(new ConnectionEventFilter { FailuresOnly = _failuresOnly }, EventLimit);
+    }
+
+    private void OnFailuresOnlyChanged(bool value)
+    {
+        _failuresOnly = value;
+        Reload();
+    }
+
+    private static string KindWord(string kind) => kind switch
+    {
+        "opened" => "Opened",
+        "handshake_succeeded" => "Handshake ok",
+        "handshake_failed" => "Handshake FAILED",
+        "closed" => "Closed",
+        _ => kind,
+    };
+
+    public async ValueTask DisposeAsync()
+    {
+        _disposed = true;
+        _timer?.Dispose();
+        await _stop.CancelAsync().ConfigureAwait(false);
+        _subscription?.Dispose();
+        try
+        {
+            await _pump.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected.
+        }
+
+        _stop.Dispose();
+    }
+}

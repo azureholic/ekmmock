@@ -2,6 +2,7 @@ using System.Collections;
 using System.Diagnostics;
 using EkmMock.Server.Connections;
 using EkmMock.Server.Hosting;
+using EkmMock.Server.WebConsole;
 
 namespace EkmMock.Server.Ekm;
 
@@ -107,9 +108,10 @@ internal static class EkmPipeline
 {
     /// <summary>
     /// Wires the port separation of spec 5.4: the EKM pipeline runs <em>only</em> for connections that arrived on an EKM listener port
-    /// (<see cref="IEkmPortPolicy"/>, decided by <c>HttpContext.Connection.LocalPort</c>, never by Host header). Every other port gets a
-    /// plain <c>404</c> for everything, so EKM routes cannot be reached through the console listener. The console pipeline (M5) replaces that
-    /// 404 branch; on the EKM port anything that is not an EKM route is answered with the EKM-style ProxyError <c>404</c>.
+    /// (<see cref="IEkmPortPolicy"/>, decided by <c>HttpContext.Connection.LocalPort</c>, never by Host header), the console pipeline
+    /// (<see cref="WebConsole.ConsolePipeline"/>) only for connections on a console port. EKM routes cannot be reached through the console
+    /// listener and console routes (pages, <c>/_blazor</c>, <c>/api/console/*</c>, health) cannot be reached through the EKM listener: on the EKM port
+    /// anything that is not an EKM route is the EKM-style ProxyError <c>404</c>; on any other port (a listener nobody configured) it is a plain <c>404</c>.
     /// </summary>
     public static IApplicationBuilder UseEkmPipeline(this IApplicationBuilder app)
     {
@@ -130,7 +132,10 @@ internal static class EkmPipeline
             branch.Run(static context => context.RequestServices.GetRequiredService<EkmDispatcher>().InvokeAsync(context));
         });
 
-        // Reached only by requests that did not arrive on an EKM port.
+        // The console (M5): reached only by connections on a console port.
+        app.UseConsolePipeline();
+
+        // Reached only by requests that arrived on neither an EKM nor a console port.
         app.Run(static context =>
         {
             context.Response.StatusCode = StatusCodes.Status404NotFound;

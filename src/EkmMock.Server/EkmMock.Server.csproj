@@ -3,9 +3,19 @@
   <PropertyGroup>
     <RootNamespace>EkmMock.Server</RootNamespace>
     <AssemblyName>EkmMock.Server</AssemblyName>
-    <!-- Source-generated System.Text.Json only: reflection-based serialization is switched off on purpose. -->
-    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+    <!--
+      M5: reflection-based System.Text.Json has to be ON for the Blazor Server console: the framework itself deserializes its JavaScript-initializer manifest and the SignalR/Blazor
+      circuit with the default resolver, and the host fails to start with the switch off. EkmMock's own JSON stays source-generated (every call passes a JsonTypeInfo from a
+      JsonSerializerContext); an architecture test scans the sources so that reflection serialization cannot creep into our own code. See DECISIONS.md "M5: JSON".
+    -->
+    <JsonSerializerIsReflectionEnabledByDefault>true</JsonSerializerIsReflectionEnabledByDefault>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components" />
+    <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components.Icons" />
+    <PackageReference Include="Microsoft.Identity.Web" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\EkmMock.Crypto\EkmMock.Crypto.csproj" />
@@ -14,6 +24,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="EkmMock.Server.Tests" />
+    <InternalsVisibleTo Include="EkmMock.Console.Tests" />
   </ItemGroup>
 
 </Project>

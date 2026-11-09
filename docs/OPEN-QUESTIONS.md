@@ -121,3 +121,12 @@ supported" (`OperationNotAllowed` exists in the code but nothing emits it yet).
     connection event and the record carry the value without further change.
 32. **The 150/250 ms warning/error log levels (spec 9) are not implemented yet** (decided in DECISIONS "M4: Capture pipeline"; M7). Until then a slow request is visible in the inspector (budget colour, filter "only over
     budget") and in the `duration_ms` field, not as a log level.
+33. **Docker port mapping versus the mandatory loopback bind check (M5).** Spec 5.4 reaches LoopbackOnly "via docker port mapping `127.0.0.1:8080:8080`", but the app must refuse `LoopbackOnly` with a non-loopback bind, and a
+    container needs a non-loopback bind (the mapped traffic arrives on the bridge address) to be reachable at all. Inside a container the console therefore cannot run in LoopbackOnly. Options for M9: require `EntraId` in the image, or add an explicit,
+    loudly named opt-in (for example `Console:Auth=LoopbackOnly` plus `Console:ContainerPortMapped=true` that allows the bind but keeps the Host-header and Origin checks). Not decided; the strict rule stays.
+34. **Entra sign-in is not verified against a real tenant (M5).** The OIDC handshake (Microsoft.Identity.Web, cookie, sign-out) could not be run offline. Verified instead: policy enforcement (allowed object id ok, other id 403, anonymous challenged),
+    group-claim matching, tenant check and the start-up validation matrix, using a fake authentication scheme. Needs a manual check with a real app registration (redirect URI `https://<console host>/signin-oidc`).
+35. **Group-claim overage (M5).** With more than about 200 groups Entra sends a Graph link instead of the `groups` claim; `AllowedGroupId` then denies. Use `AllowedObjectIds` or "groups assigned to the application" for such users.
+    Resolving the overage through Graph was not implemented.
+36. **Circuit identity is not revalidated (M5).** A signed-in user keeps their circuit after removal from the allow-list until the circuit ends or the sign-in cookie expires. Acceptable for a test tool; say so if it is not.
+37. **Fluent UI Blazor v4 versus v5 (M5).** v4.14.5 was chosen because the repository skill documents v4. v5.0.1 is the latest stable; migrating later affects `FluentSelect`, theming and some component names.

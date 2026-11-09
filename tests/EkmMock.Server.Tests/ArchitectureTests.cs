@@ -35,15 +35,15 @@ public sealed class ArchitectureTests
     }
 
     [Fact]
-    public void Server_ConfiguresListenersAndTlsOnlyInTheEkmEndpointSetup()
+    public void Server_ConfiguresListenersAndTlsOnlyInTheEndpointSetups()
     {
-        // M3: listeners, UseHttps and client certificate mode live in EkmKestrel.cs only; the cipher policy in TlsPolicy.cs/EkmKestrel.cs.
+        // M3/M5: listeners, UseHttps and client certificate mode live in EkmKestrel.cs (EKM) and ConsoleKestrel.cs (console) only; the cipher policy in TlsPolicy.cs/EkmKestrel.cs.
         var listenerTokens = new[] { "ConfigureKestrel(", "UseKestrel(", "UseHttps(", "ListenAnyIP(", "ListenLocalhost(", "ClientCertificateMode" };
         var sources = Directory.EnumerateFiles(RepoPaths.Src("EkmMock.Server"), "*.cs", SearchOption.AllDirectories)
             .Where(static f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"))
             .ToList();
 
-        foreach (var file in sources.Where(static f => Path.GetFileName(f) != "EkmKestrel.cs"))
+        foreach (var file in sources.Where(static f => Path.GetFileName(f) is not ("EkmKestrel.cs" or "ConsoleKestrel.cs")))
         {
             var text = File.ReadAllText(file);
             foreach (var token in listenerTokens)
@@ -118,7 +118,20 @@ public sealed class ArchitectureTests
         var types = typeof(Program).Assembly.GetTypes();
 
         types.ShouldNotContain(t => typeof(Microsoft.AspNetCore.Mvc.ControllerBase).IsAssignableFrom(t));
-        typeof(Program).Assembly.GetReferencedAssemblies().Select(static a => a.Name).ShouldNotContain("Microsoft.AspNetCore.Mvc.Core");
+
+        // M5: the assembly now references Microsoft.AspNetCore.Mvc.Core because Microsoft.Identity.Web's sign-in builder derives from MVC types, so the M2 check on the referenced
+        // assemblies is replaced by what it was a proxy for: no source file of the server uses MVC or ProblemDetails (the EKM wire contract is ProxyError, not ProblemDetails).
+        var sources = Directory.EnumerateFiles(RepoPaths.Src("EkmMock.Server"), "*.*", SearchOption.AllDirectories)
+            .Where(static f => (f.EndsWith(".cs", StringComparison.Ordinal) || f.EndsWith(".razor", StringComparison.Ordinal))
+                && !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
+                && !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}"));
+        foreach (var file in sources)
+        {
+            var text = File.ReadAllText(file);
+            text.Contains("Microsoft.AspNetCore.Mvc", StringComparison.Ordinal).ShouldBeFalse(Path.GetFileName(file));
+            text.Contains("ProblemDetails", StringComparison.Ordinal).ShouldBeFalse(Path.GetFileName(file));
+            text.Contains("[ApiController]", StringComparison.Ordinal).ShouldBeFalse(Path.GetFileName(file));
+        }
     }
 
     [Fact]
@@ -154,10 +167,45 @@ public sealed class ArchitectureTests
     }
 
     [Fact]
-    public void Server_ExposesOnlyProgramPublicly()
+    public void Server_ExposesOnlyProgramAndTheRazorConsoleComponentsPublicly()
     {
-        // Everything else stays internal so M4/M5 can evolve it freely; Program is public for WebApplicationFactory<Program>.
-        typeof(Program).Assembly.GetExportedTypes().Select(static t => t.Name).ShouldBe(["Program"]);
+        // Everything else stays internal so later milestones can evolve it freely; Program is public for WebApplicationFactory<Program>. The Razor compiler makes every
+        // component class public (there is no way to declare one internal), so the console components, their plain-data chart models and nothing else are public too.
+        var exported = typeof(Program).Assembly.GetExportedTypes();
+        exported.Where(static t => t.Namespace is null || !t.Namespace.StartsWith("EkmMock.Server.WebConsole", StringComparison.Ordinal))
+            .Select(static t => t.Name)
+            .ShouldBe(["Program"]);
+        exported.Where(static t => t.Namespace?.StartsWith("EkmMock.Server.WebConsole", StringComparison.Ordinal) == true)
+            .Where(static t => !typeof(Microsoft.AspNetCore.Components.IComponent).IsAssignableFrom(t)
+                && !t.Namespace!.EndsWith(".Charts", StringComparison.Ordinal)
+                && t.Name is not (nameof(EkmMock.Server.WebConsole.Components.TabDefinition) or "_Imports"))
+            .Select(static t => t.FullName)
+            .ShouldBeEmpty("only components and their plain-data models are public");
+    }
+
+    [Fact]
+    public void Server_OwnJson_IsAlwaysSourceGenerated_EvenThoughTheFrameworkNeedsReflectionSerialization()
+    {
+        // M5: JsonSerializerIsReflectionEnabledByDefault is on because Blazor Server's own plumbing needs it. EkmMock's own serialization must stay source generated, so every call of
+        // JsonSerializer / Results.Json / WriteAsJsonAsync / ReadFromJsonAsync in the sources has to pass a JsonTypeInfo (a JsonSerializerContext's .Default.X or a typeInfo variable).
+        var pattern = new System.Text.RegularExpressions.Regex(@"(JsonSerializer\.(Serialize|SerializeToUtf8Bytes|Deserialize)(Async)?|Results\.Json|WriteAsJsonAsync|ReadFromJsonAsync)\s*[<(]", System.Text.RegularExpressions.RegexOptions.None);
+        var sources = Directory.EnumerateFiles(RepoPaths.Src("EkmMock.Server"), "*.*", SearchOption.AllDirectories)
+            .Where(static f => (f.EndsWith(".cs", StringComparison.Ordinal) || f.EndsWith(".razor", StringComparison.Ordinal))
+                && !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
+                && !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}"));
+        var offenders = new List<string>();
+        foreach (var file in sources)
+        {
+            foreach (var line in File.ReadAllLines(file).Where(static l => !l.TrimStart().StartsWith("//", StringComparison.Ordinal) && !l.TrimStart().StartsWith("///", StringComparison.Ordinal)))
+            {
+                if (pattern.IsMatch(line) && !line.Contains(".Default.", StringComparison.Ordinal) && !line.Contains("typeInfo", StringComparison.Ordinal) && !line.Contains("TypeInfo", StringComparison.Ordinal))
+                {
+                    offenders.Add($"{Path.GetFileName(file)}: {line.Trim()}");
+                }
+            }
+        }
+
+        offenders.ShouldBeEmpty();
     }
 
     [Fact]

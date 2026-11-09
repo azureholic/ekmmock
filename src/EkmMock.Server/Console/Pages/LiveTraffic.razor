@@ -1,0 +1,144 @@
+@page "/"
+@using EkmMock.Server.Inspector
+
+<PageTitle>Live traffic - EkmMock console</PageTitle>
+
+<h1 tabindex="-1">Live traffic</h1>
+
+<section class="live-toolbar" aria-label="Live traffic controls" data-role="toolbar">
+    <FluentButton Appearance="Appearance.Accent"
+                  IconStart="@(Model.Paused ? new Icons.Regular.Size20.Play() : new Icons.Regular.Size20.Pause())"
+                  data-role="pause-resume"
+                  aria-pressed="@(Model.Paused ? "true" : "false")"
+                  OnClick="TogglePause">@(Model.Paused ? "Resume" : "Pause")</FluentButton>
+    <FluentButton Appearance="Appearance.Neutral"
+                  IconStart="@(new Icons.Regular.Size20.Delete())"
+                  data-role="clear"
+                  aria-describedby="clear-hint"
+                  OnClick="ClearView">Clear view</FluentButton>
+    <FluentSwitch Value="_autoScroll" ValueChanged="SetAutoScroll" data-role="auto-scroll" Label="Auto-scroll" Title="Keep the newest row in view" />
+    <FluentSwitch Value="Model.ShowConnectionEvents" ValueChanged="SetShowConnections" data-role="connection-toggle" Label="Connection events" Title="Show TLS connection events inline" />
+    <a class="toolbar-link" href="/api/console/export?format=json" download data-role="export">Export masked JSON</a>
+</section>
+<p id="clear-hint" class="live-hint">Clear view empties this list only; the inspector keeps its history. Pause freezes the list while new exchanges are counted.</p>
+
+<p class="live-status" data-role="live-status">
+    <span role="status" data-role="state-word">
+        @if (Model.Paused)
+        {
+            <FluentIcon Value="@(new Icons.Filled.Size16.PauseCircle())" Color="Color.Warning" />
+            <strong>Paused</strong>
+        }
+        else
+        {
+            <FluentIcon Value="@(new Icons.Filled.Size16.RecordStop())" Color="Color.Success" />
+            <strong>Live</strong>
+        }
+    </span>
+    @if (Model.Paused)
+    {
+        <span data-role="pending" class="live-pending">@Model.PendingCount new @(Model.PendingCount == 1 ? "exchange is" : "exchanges are") waiting@(Model.PendingDropped > 0 ? $" ({Model.PendingDropped} older ones were dropped)" : string.Empty)</span>
+    }
+    <span data-role="row-count" class="live-count">@Rows.Length @(Rows.Length == 1 ? "row" : "rows")@(Model.TrimmedRows > 0 ? $", {Model.TrimmedRows} older rows left this view (cap {Cap})" : string.Empty)</span>
+    @if (_feedDropped > 0)
+    {
+        <span data-role="feed-dropped" class="live-count">The live feed skipped @_feedDropped items because this browser fell behind; the inspector still has them.</span>
+    }
+</p>
+
+<form class="live-filters" aria-label="Live traffic filters" data-role="filters" @onsubmit="() => { }" @onsubmit:preventDefault="true">
+    <div class="filter-field"><FluentSelect TOption="Choice" Label="Operation" Items="@OperationChoices" OptionText="@(c => c.Label)" OptionValue="@(c => c.Value ?? string.Empty)"
+                  SelectedOption="_operation" SelectedOptionChanged="OnOperationChanged" data-role="filter-op" /></div>
+    <div class="filter-field"><FluentSelect TOption="Choice" Label="Status" Items="@StatusChoices" OptionText="@(c => c.Label)" OptionValue="@(c => c.Value ?? string.Empty)"
+                  SelectedOption="_status" SelectedOptionChanged="OnStatusChanged" data-role="filter-status" /></div>
+    <div class="filter-field"><FluentTextField Label="Namespace" Value="@_namespace" ValueChanged="OnNamespaceChanged" Immediate="true" ImmediateDelay="300" data-role="filter-namespace" /></div>
+    <div class="filter-field"><FluentTextField Label="Key" Value="@_key" ValueChanged="OnKeyChanged" Immediate="true" ImmediateDelay="300" data-role="filter-key" /></div>
+    <div class="filter-field"><FluentTextField Label="Client CN" Value="@_clientCn" ValueChanged="OnClientCnChanged" Immediate="true" ImmediateDelay="300" data-role="filter-cn" /></div>
+    <div class="filter-field"><FluentTextField Label="correlation_id / pool_name" Value="@_text" ValueChanged="OnTextChanged" Immediate="true" ImmediateDelay="300" data-role="filter-text" /></div>
+    <FluentCheckbox Label="Only errors" Value="_onlyErrors" ValueChanged="OnOnlyErrorsChanged" data-role="filter-errors" />
+    <FluentCheckbox Label="Only over budget" Value="_onlyOverBudget" ValueChanged="OnOnlyOverBudgetChanged" data-role="filter-over-budget" />
+    <FluentCheckbox Label="Hide health probes (info)" Value="_hideInfo" ValueChanged="OnHideInfoChanged" data-role="filter-hide-info" />
+    <FluentButton Appearance="Appearance.Lightweight" data-role="filter-reset" OnClick="ResetFilters">Reset filters</FluentButton>
+</form>
+
+<div class="live-split @(_selectedId is null ? null : "has-detail")">
+    <section class="live-list" aria-label="Exchanges, newest first" data-role="list">
+        <div class="live-table" role="table" aria-label="Live traffic" aria-rowcount="@(Rows.Length + 1)">
+            <div class="live-header" role="row">
+                <span role="columnheader">Time (UTC)</span>
+                <span role="columnheader">Op</span>
+                <span role="columnheader">Namespace</span>
+                <span role="columnheader">Key</span>
+                <span role="columnheader">Alg</span>
+                <span role="columnheader">Status</span>
+                <span role="columnheader">Latency</span>
+                <span role="columnheader">Client CN</span>
+                <span role="columnheader">correlation_id</span>
+                <span role="columnheader">Fault</span>
+            </div>
+            <div class="live-body" role="rowgroup" @ref="_scroller" data-role="rows">
+                @if (Rows.Length == 0)
+                {
+                    <p class="live-empty" data-role="empty">No traffic yet. Requests to the EKM endpoint appear here as they arrive@(Model.Filter == EmptyFilter ? "." : ", if they match the filters.")</p>
+                }
+                else
+                {
+                    <Virtualize Items="@Rows" Context="row" ItemSize="@RowHeight" OverscanCount="8" TItem="LiveRow">
+                        <ItemContent>
+                            @if (row.Exchange is { } exchange)
+                            {
+                                var selected = _selectedId == exchange.Id;
+                                <div class="live-row @(selected ? "row-selected" : null)" role="row" tabindex="0" aria-selected="@(selected ? "true" : "false")"
+                                     data-row="exchange" data-exchange-id="@exchange.Id"
+                                     @key="row.Key" @onclick="() => Select(exchange.Id)" @onkeydown="e => OnRowKey(e, exchange.Id)">
+                                    <span role="cell" class="cell-time" title="@ConsoleDisplay.FullTime(exchange.ReceivedAtUtc)">@ConsoleDisplay.Time(exchange.ReceivedAtUtc)</span>
+                                    <span role="cell" class="cell-op">@(exchange.Operation ?? "(unrouted)")</span>
+                                    <span role="cell" class="cell-ns">@(exchange.Request.Namespace ?? "-")</span>
+                                    <span role="cell" class="cell-key">@(exchange.Request.Key ?? "-")</span>
+                                    <span role="cell" class="cell-alg">@(exchange.Context.Algorithm ?? "-")</span>
+                                    <span role="cell" class="cell-status @ConsoleDisplay.StatusCss(exchange.Status)" data-role="status" title="@ConsoleDisplay.StatusText(exchange.Status, exchange.Response.Code)">@ConsoleDisplay.StatusText(exchange.Status, exchange.Response.Code)</span>
+                                    <span role="cell" class="cell-latency @ConsoleDisplay.BudgetCss(exchange.Timing.Budget)" data-role="latency" data-budget="@exchange.Timing.Budget.ToString().ToLowerInvariant()">@ConsoleDisplay.Milliseconds(exchange.Timing.TotalMs) <span class="budget-word">(@ConsoleDisplay.BudgetWord(exchange.Timing.Budget))</span></span>
+                                    <span role="cell" class="cell-cn" title="@exchange.ClientCertificate.CommonName">@(exchange.ClientCertificate.CommonName ?? "(no certificate)")</span>
+                                    <span role="cell" class="cell-corr" @onclick:stopPropagation="true" @onkeydown:stopPropagation="true">
+                                        <span data-role="correlation-id" title="@exchange.Context.CorrelationId">@ConsoleDisplay.ShortId(exchange.Context.CorrelationId)</span>
+                                        @if (!string.IsNullOrEmpty(exchange.Context.CorrelationId))
+                                        {
+                                            <CopyButton Text="@exchange.Context.CorrelationId" Title="Copy correlation_id" Confirmation="correlation_id copied" />
+                                        }
+                                    </span>
+                                    <span role="cell" class="cell-fault" data-role="fault">
+                                        @if (exchange.Faults is { } fault)
+                                        {
+                                            <FluentBadge Appearance="Appearance.Accent">fault: @fault.Rule</FluentBadge>
+                                        }
+                                    </span>
+                                </div>
+                            }
+                            else if (row.Connection is { } connection)
+                            {
+                                <div class="live-row live-connection @(connection.Kind == "handshake_failed" ? "connection-failed" : null)" role="row" data-row="connection" data-event-kind="@connection.Kind" @key="row.Key">
+                                    <span role="cell" class="cell-time" title="@ConsoleDisplay.FullTime(connection.AtUtc)">@ConsoleDisplay.Time(connection.AtUtc)</span>
+                                    <span role="cell" class="cell-op"><FluentBadge Appearance="Appearance.Neutral">connection</FluentBadge></span>
+                                    <span role="cell" class="cell-connection-text">@ConsoleDisplay.ConnectionSummary(connection)<span class="cell-remote"> from @(connection.RemoteEndPoint ?? "?")</span></span>
+                                </div>
+                            }
+                        </ItemContent>
+                    </Virtualize>
+                }
+            </div>
+        </div>
+    </section>
+
+    @if (_selectedId is { } selectedId)
+    {
+        <aside class="live-detail" aria-label="Exchange detail" data-role="detail-panel">
+            <div class="detail-panel-header">
+                <a href="/exchange/@selectedId" data-role="open-full">Open as page</a>
+                <FluentButton Appearance="Appearance.Lightweight" IconStart="@(new Icons.Regular.Size16.Dismiss())" aria-label="Close detail" Title="Close detail" data-role="close-detail" OnClick="CloseDetail">Close</FluentButton>
+            </div>
+            <ConsoleErrorBoundary @key="selectedId">
+                <ExchangeDetailView ExchangeId="selectedId" Compact="true" />
+            </ConsoleErrorBoundary>
+        </aside>
+    }
+</div>

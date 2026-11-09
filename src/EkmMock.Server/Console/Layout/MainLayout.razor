@@ -1,0 +1,87 @@
+@inherits LayoutComponentBase
+@inject IConsoleStatusProvider Status
+@inject IConsoleUser CurrentUser
+
+<FluentDesignTheme @bind-Mode="_mode" StorageName="ekmmock-theme" OnLoaded="OnThemeLoaded" />
+
+<div class="console-shell" data-role="shell">
+    <a class="skip-link" href="#console-main">Skip to main content</a>
+
+    <header class="console-header" data-role="header">
+        <div class="console-brand">
+            <FluentIcon Value="@(new Icons.Regular.Size24.ShieldKeyhole())" Color="Color.Accent" />
+            <span class="console-title">EkmMock console</span>
+            <span class="console-subtitle">Software HSM simulator, not an HSM</span>
+        </div>
+        <div class="console-header-actions">
+            <span class="console-user" data-role="user" title="@(_user?.Id)">@UserText</span>
+            @if (_user is { Mode: ConsoleAuthMode.EntraId })
+            {
+                <a class="console-signout" href="/signout">Sign out</a>
+            }
+            <FluentButton Appearance="Appearance.Lightweight"
+                          IconStart="@ThemeIcon"
+                          Title="@ThemeTitle"
+                          aria-label="@ThemeTitle"
+                          data-role="theme-toggle"
+                          OnClick="CycleTheme">@ThemeLabel</FluentButton>
+        </div>
+    </header>
+
+    <div class="console-columns">
+        <nav class="console-nav" aria-label="Console sections" data-role="nav">
+            <NavMenu />
+        </nav>
+
+        <main id="console-main" class="console-main" tabindex="-1" data-role="main">
+            <DevModeBanner />
+            <FaultsBanner />
+            <ConsoleErrorBoundary @key="Navigation.Uri">
+                @Body
+            </ConsoleErrorBoundary>
+        </main>
+    </div>
+</div>
+
+<FluentToastProvider />
+<FluentDialogProvider />
+<FluentMessageBarProvider />
+<FluentTooltipProvider />
+
+@code {
+    private DesignThemeModes _mode = DesignThemeModes.System;
+    private ConsoleUserInfo? _user;
+
+    [Inject] private NavigationManager Navigation { get; set; } = default!;
+
+    private string UserText => _user switch
+    {
+        null => string.Empty,
+        { Mode: ConsoleAuthMode.LoopbackOnly } => "Local console (loopback)",
+        var user => user.DisplayName,
+    };
+
+    private string ThemeLabel => _mode switch { DesignThemeModes.Light => "Light", DesignThemeModes.Dark => "Dark", _ => "System" };
+
+    private string ThemeTitle => $"Theme: {ThemeLabel}. Activate to switch (system, light, dark).";
+
+    private Icon ThemeIcon => _mode switch
+    {
+        DesignThemeModes.Light => new Icons.Regular.Size20.WeatherSunny(),
+        DesignThemeModes.Dark => new Icons.Regular.Size20.WeatherMoon(),
+        _ => new Icons.Regular.Size20.Desktop(),
+    };
+
+    protected override async Task OnInitializedAsync() => _user = await CurrentUser.GetAsync();
+
+    private void CycleTheme()
+        => _mode = _mode switch
+        {
+            DesignThemeModes.System => DesignThemeModes.Light,
+            DesignThemeModes.Light => DesignThemeModes.Dark,
+            _ => DesignThemeModes.System,
+        };
+
+    // The theme is read from the browser's storage by the component after the first render; this keeps the button in step with it.
+    private void OnThemeLoaded(LoadedEventArgs args) => StateHasChanged();
+}

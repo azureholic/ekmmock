@@ -79,6 +79,7 @@ internal sealed class EkmKestrelSetup : IConfigureOptions<KestrelServerOptions>
     private readonly ClientCertificateValidator _validator;
     private readonly TlsPolicy _policy;
     private readonly ConnectionCapture _capture;
+    private readonly ListenerRegistry _listeners;
     private readonly ILogger _logger;
 
     public EkmKestrelSetup(
@@ -91,6 +92,7 @@ internal sealed class EkmKestrelSetup : IConfigureOptions<KestrelServerOptions>
         IConnectionEventSink sink,
         EkmMetrics metrics,
         EkmListenerPorts ports,
+        ListenerRegistry listeners,
         TimeProvider time,
         ILoggerFactory loggerFactory)
     {
@@ -99,6 +101,7 @@ internal sealed class EkmKestrelSetup : IConfigureOptions<KestrelServerOptions>
         _certificates = certificates;
         _validator = validator;
         _policy = policy;
+        _listeners = listeners;
         _capture = new ConnectionCapture(registry, sink, metrics, ports, time, loggerFactory, _tls.HandshakeTimeout);
         _logger = loggerFactory.CreateLogger("EkmMock.Tls");
     }
@@ -133,6 +136,7 @@ internal sealed class EkmKestrelSetup : IConfigureOptions<KestrelServerOptions>
             listen.Use(_capture.Outer);
             listen.UseHttps(CreateHttpsOptions());
             listen.Use(_capture.Inner);
+            _listeners.Register(ListenerRegistry.EkmName, listen);
         }
 
         if (address.IsAnyAddress)

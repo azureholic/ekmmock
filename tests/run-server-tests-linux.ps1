@@ -55,6 +55,8 @@ mkdir -p /work
 cd /src
 tar --exclude=obj --exclude=TestResults --exclude=.git -cf - . | tar -xf - -C /work
 cd /work/tests/EkmMock.Server.Tests/bin/$CONFIGURATION/net10.0
+# The static web assets manifests written by the Windows build contain Windows paths that the Linux host cannot load (M5 console).
+rm -f ./*.staticwebassets.runtime.json ./*.staticwebassets.endpoints.json
 mkdir -p "$STUB_ROOT"
 cp /work/src/EkmMock.Server/appsettings.json "$STUB_ROOT/"
 dotnet --list-runtimes

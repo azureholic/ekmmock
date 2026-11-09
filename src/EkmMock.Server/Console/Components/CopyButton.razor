@@ -1,0 +1,39 @@
+@inject IJSRuntime Js
+@inject IToastService Toasts
+
+<FluentButton Appearance="Appearance.Lightweight"
+              IconStart="@(new Icons.Regular.Size16.Copy())"
+              Title="@Title"
+              aria-label="@Title"
+              data-role="copy"
+              OnClick="CopyAsync">@ChildContent</FluentButton>
+
+@code {
+    /// <summary>The text put on the clipboard. Never a secret: the console only offers copy for ids and for masked JSON.</summary>
+    [Parameter, EditorRequired] public string Text { get; set; } = string.Empty;
+
+    /// <summary>The accessible name and tooltip, for example "Copy correlation_id".</summary>
+    [Parameter] public string Title { get; set; } = "Copy";
+
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    /// <summary>What the confirmation toast says (default: "Copied").</summary>
+    [Parameter] public string Confirmation { get; set; } = "Copied to the clipboard";
+
+    private async Task CopyAsync()
+    {
+        try
+        {
+            await Js.InvokeVoidAsync("ekmConsole.copyText", Text);
+            Toasts.ShowSuccess(Confirmation);
+        }
+        catch (JSException)
+        {
+            Toasts.ShowError("The browser did not allow copying.");
+        }
+        catch (InvalidOperationException)
+        {
+            // No JavaScript available (prerender or a closed circuit): nothing to copy to.
+        }
+    }
+}

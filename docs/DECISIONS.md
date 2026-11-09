@@ -705,3 +705,90 @@ the handshake and gets `401 Unauthenticated` for every operation (no operation i
 - **Linux container result:** the full server test project ran in `mcr.microsoft.com/dotnet/sdk:10.0` via `tests/run-server-tests-linux.ps1` (OpenSSL): 708 tests, 0 failed, 1 skipped (the 429 placeholder); the four Linux-only
   cipher tests ran and passed there.
 
+## M5: Console (Fluent UI Blazor, auth modes, endpoint separation)
+
+### Packages
+- **Fluent UI Blazor 4.14.5** (`Microsoft.FluentUI.AspNetCore.Components` + `.Icons`), not 5.0.1 (the latest stable). The repository skill documents v4 (`FluentSelect Items/OptionText/OptionValue`, `FluentDesignTheme`, providers); v5 renames and
+  restructures parts of that API and there is no gain for this console. Revisit when the skill is updated. All assets come from the package's static web assets: no CDN, no font fetch, no manual `<script>`/`<link>` for the library.
+- **Microsoft.Identity.Web 4.18.0** (OIDC sign-in), **bunit 2.13.3**, **Microsoft.Playwright 1.64.1**; all pinned in `Directory.Packages.props`.
+- **`JsonSerializerIsReflectionEnabledByDefault=true`** (was false). Blazor Server serialises circuit/component data with reflection and failed at runtime otherwise. Everything *we* serialise still uses source-generated contexts;
+  an architecture test (`own JSON is source generated`) scans the source so that stays true.
+- **Razor components are public** (the Razor compiler always makes them so), so the M2/M3 architecture rule "no public types" now allows public types only in `WebConsole*` namespaces (components and their plain-data models, which
+  component parameters need to be public). `Program` stays the only other public type. Identity.Web references `Microsoft.AspNetCore.Mvc.Core`, so the M2 "no Mvc.Core reference" test became a source scan for MVC/ProblemDetails use.
+  Listener configuration is allowed in `EkmKestrel.cs` and `ConsoleKestrel.cs` (was `EkmKestrel.cs` only).
+- Namespace is `EkmMock.Server.WebConsole` (a `Console` namespace clashes with `System.Console`); folder stays `Console/` as in spec 16.
+
+### Endpoint separation
+- Kestrel has two listeners: EKM (mTLS, 8443) and Console (`Endpoints:Console:Url`, default `https://127.0.0.1:8080`, TLS 1.2/1.3, **no client certificate**). `UseEkmPipeline` branches on
+  `HttpContext.Connection.LocalPort`: EKM port gives the EKM pipeline, console port gives the console pipeline, any other port gives 404. No host filters. EKM routes on the console port and Blazor/`/_blazor`/`/_framework`/`/_content`/`/api/console/*`/
+  `/healthz`/`/readyz` on the EKM port both return 404, proven on real Kestrel listeners (ephemeral ports, `ListenerRegistry` records the bound ports).
+- Console and EKM must use different ports (validated). Console requests are never captured as EKM exchanges or connection events (test).
+- **Console certificate:** `Console:Tls:CertFile/KeyFile` if set, otherwise the EKM server certificate provider (so `--dev` auto-generates the throw-away, flagged localhost certificate via `EkmMock.Pki`).
+- `/healthz` (process alive) and `/readyz` (key store loaded, self-test passed, EKM listener up) are anonymous, on the console port only, and contain no sensitive information. `/metrics` is **not** implemented (M7).
+- Unknown console paths return 404 for every method (a catch-all route with the lowest order; otherwise POSTs got 405 from the static-assets route).
+- Static assets: `MapStaticAssets` is only mapped when the server assembly's own manifest exists (a test process looked for the *entry* assembly's manifest). The Windows-built manifests contain Windows paths, so
+  `tests/run-server-tests-linux.ps1` removes them in the container copy.
+- The implicit global `UseAuthentication/UseAuthorization` that `WebApplication` adds at the top of the pipeline would have challenged EKM requests and `/healthz` in EntraId mode; the app sets the
+  `__AuthenticationMiddlewareSet`/`__AuthorizationMiddlewareSet` markers and the console branch adds its own.
+
+### Auth modes
+- `Console:Auth` = `LoopbackOnly` (default) or `EntraId`. One validator (`ConsoleConfigurationValidator`) is the single source of truth, used by the builder pre-flight, `ValidateOnStart` and the Kestrel setup. Failure prints a clear message to
+  stderr and exits with **code 78** (EX_CONFIG).
+- **LoopbackOnly** + any non-loopback bind (`0.0.0.0`, `::`, `*`, `+`, a public IP, a hostname that does not resolve *entirely* to loopback) is refused. `localhost`, `127.0.0.0/8`, `::1`, `::ffff:127.0.0.1` are accepted. The user is the fixed identity `loopback`.
+- **Loopback runtime check (decision):** the startup check is mandatory and cannot be turned off. In addition `Console:EnforceLoopbackClient` (default **true**) rejects a non-loopback remote IP at request time. With the mandatory bind check
+  this is defence in depth only, and cannot fire for a correctly configured host. A container that publishes `127.0.0.1:8080:8080` sees the bridge address as remote IP, but it also cannot satisfy the bind check (see OPEN-QUESTIONS 33), so
+  that deployment must use `EntraId` or set `EnforceLoopbackClient=false` knowingly. In LoopbackOnly the Host header must also be a loopback name (or in `Console:AllowedHosts`) as a DNS-rebinding defence, and in both modes a cross-origin `Origin`
+  is refused for `/_blazor` and for non-GET requests.
+- **EntraId** (Microsoft.Identity.Web, cookie `__Host-ekmmock-console`): needs TenantId, ClientId, an `https` Instance and either `AllowedObjectIds` or `AllowedGroupId` (GUIDs). The **client secret only comes from `EKMMOCK_CONSOLE_CLIENT_SECRET` or
+  `..._FILE`**; a `Console:EntraId:ClientSecret` in configuration is refused in every mode and the secret is never logged or shown. Missing config refuses to start.
+- **Policy `EkmMock.Console`** is the fallback policy for everything (pages, SignalR hub, `/api/console/*`); `/healthz` and `/readyz` are `AllowAnonymous`. `ConsoleAccessPolicy` allows an `oid` in the list (case-insensitive) or a matching `groups`
+  claim and checks `tid`. Anonymous gets a challenge (a 401 instead of a redirect for `/api` and `/_blazor`), any other identity 403. Group-claim overage is not handled (OPEN-QUESTIONS 34).
+- `IConsoleUser` is the one abstraction for the current user. `AuditName` is `loopback` or `Name (oid)`, and the audited reveal uses it. The circuit's identity is fixed when it connects (no revalidation within a circuit).
+- **Antiforgery:** Blazor forms use the built-in antiforgery. The only state-changing API is `POST /api/console/exchanges/{id}/reveal`, protected by an endpoint filter (header `X-CSRF-TOKEN`, token from `GET /api/console/antiforgery`) and audited.
+  A Bearer/Entra token policy for the CLI is left to M8. Data Protection keys persist (unencrypted) to `<Data:Path>/dataprotection`, falling back to in-memory keys when the folder is not writable.
+
+### Headers and errors
+- CSP: `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' wss://{host}; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'`.
+  `'unsafe-inline'` is for styles only (Fluent web components set inline styles); there is no inline script. A real-browser test caught two violations that were then removed (an inline `onclick` on the reconnect button and the inline script of
+  `<ImportMap/>`, which is no longer rendered); behaviour lives in `console.js`. The browser test fails on any console error, CSP violation or failed request.
+- Also `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, COOP/CORP, `Permissions-Policy`, `Cache-Control: no-store` (unless already set). HSTS only for non-loopback hosts (it applies to the host, not the port,
+  so sending it on `localhost:8080` would affect other local sites).
+- Non-development: a generic 500 without a stack trace; `CircuitOptions.DetailedErrors` only in Development; `ErrorBoundary` per page; the default Blazor reconnect UI with a minimal style.
+
+### API
+- `/api/console/*` uses **snake_case** (consistent with the EKM and inspector JSON) and **source-generated** `System.Text.Json`. Endpoints: `status`, `inspector/status`, `antiforgery`, `exchanges` (filters and paging), `exchanges/{id}`,
+  `exchanges/{id}/kql`, `POST exchanges/{id}/reveal`, `connections`, `connections/open`, `connections/statistics`, `dashboard`, `export`. They are thin over `IInspector`/`IInspectorQuery`.
+- `InspectorService.ExportAsync` was fixed to use only asynchronous writes (Kestrel disallows synchronous IO; found by the export endpoint test).
+
+### Live traffic, feed batching and the 1 s guarantee
+- One feed subscription per component (per circuit), disposed with it; no prerender (`InteractiveServerRenderMode(prerender: false)`) so a subscription is never created twice.
+- A pump drains everything available, renders once, then waits `LiveTraffic:RenderIntervalMs` (default 150 ms, validated 20 to 900 ms so the worst case stays below 1 s) via `Task.Delay(.., TimeProvider)`. A 1000 req/s flood causes about 7 renders per
+  second, not 1000. Measured exchange-to-visible latency: bUnit with a real mTLS request n=20 p50 153 ms, max 172 ms; real Chromium against the real server process p50 about 200 ms, max 225 ms (limit 1 s).
+- The in-UI list is capped at `MaxRows` = 2000 (oldest dropped). **Pause** buffers new exchanges, shows the pending count and keeps at most `MaxPending` = 5000 (oldest dropped, and the drop is counted and shown). **Clear view** is view-only (remembers the last
+  cleared id/time; the inspector keeps its data). A filter change reloads from the ring buffer; while paused it reloads a frozen view (`BeforeId`).
+- The table is a `Virtualize` over a `role=table` div, not `FluentDataGrid` (variable-height inline connection rows and the batching are simpler and cheaper this way). `FluentDataGrid` is used for the open-connections table.
+
+### Pages and components
+- Live traffic (`/`), Exchange detail (side panel and deep link `/exchange/{id}`; tabs Overview, TLS & client certificate, Request, Response, Timing as SVG waterfall vs the 250 ms line; KQL snippet), Connections, Dashboard (window 15 min / 1 h, 2 s refresh by timer;
+  heartbeat card ticks once per second from a `TimeProvider` timer without re-querying, red above 60 s with text and icon).
+- **Tabs** are a small custom accessible component (arrow/Home/End keys, `role=tab`) instead of `FluentTabs`, to keep the keyboard behaviour and test hooks under our control.
+- **Charts** are Razor/SVG components with plain-data models and no chart library: `LineChart` (percentiles with the 250 ms budget line), `StackedColumnChart` (requests per minute by op, integer count axis), `HorizontalBarChart` (errors by code), `Sparkline`.
+  Razor reserves `<text>`, so a small `SvgText` component renders SVG labels.
+- **Secrets:** masked display is `32 bytes · fp 3f9a1c07b2e4`. A bUnit leak scan (hex, base64, base64url of the raw DEK) proves masked mode never puts the value in markup. **Reveal** is shown only when allowed (`EKMMOCK_INSPECTOR_ALLOW_REVEAL` and
+  `SecretDisplay=Reveal`), calls the audited service as the current user, keeps the value in component memory only (never JS, URL, storage, logs, export), and hides it after 30 s or on navigation.
+- **Replay** is shown, enabled only for `CanReplay`, and prints "Replay is implemented in M6." It never calls the replay seam. The "faults active" banner is wired to `IFaultStatus` (always false until M7).
+- Nav: Live traffic, Connections, Dashboard, plus disabled placeholders (Keys, Namespaces & trust, Certificates, Playground, Fault injection, Audit log, About) labelled with their milestone. Theme toggle (system/light/dark) via `FluentDesignTheme`, set after render.
+
+### M5: Tests and results
+- `tests/EkmMock.Console.Tests` (new: bUnit component tests, the live-update tests, and 6 real-browser tests with `Trait("Category","Browser")`; exclude with `--filter "Category!=Browser"`); host-level tests added to `EkmMock.Server.Tests`
+  (`ConsolePortSeparationTests` for spec 14 test 16, `ConsoleStartupValidationTests` for test 17 incl. real child-process exit codes, `ConsoleAuthAndApiTests`).
+- Playwright installs Chromium on demand; if no browser or server can start, the browser tests skip with an explicit reason (not triggered here: all 6 ran).
+- Results on Windows: 1302 tests (Crypto 308, Server 831, Console 163), 1297 passed, 0 failed, 5 skipped (all in Server.Tests: the 429 placeholder and the four Linux-only cipher tests). Server and Console projects were each run 5 times in a row: 10 of 10 green.
+  On Linux (container script) the Server project ran 831 tests twice: 0 failed, 1 skipped (the 429 placeholder), so the four cipher tests ran. A flake in `ConsoleRequests_AreNeverCapturedAsEkmTraffic...` appeared once on Linux (baseline taken
+  while an earlier test's asynchronous capture was still draining) and was fixed test-side with a settle delay.
+
+### M5: Not covered
+- **Entra OIDC against a real tenant** was not exercised (policy, challenge, 403 and startup validation are tested with a fake scheme).
+- Keys, Namespaces & trust, Certificates, Playground, Fault injection, Audit log, About pages (M6/M7), replay sending (M6), `/metrics` (M7), CLI (M8), packaging (M9).
+- A visual pass with the editor's integrated browser tool was not done; the visual check used Playwright Chromium against the real server process (see the report).
+

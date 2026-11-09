@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
@@ -82,6 +83,9 @@ internal sealed class RealEkmHost : IAsyncDisposable
 
     public int Port { get; private set; }
 
+    /// <summary>The console listener's port (M5); the EKM tests do not use it except to prove the port separation.</summary>
+    public int ConsolePort { get; private set; }
+
     public int? PlainHttpPort { get; private set; }
 
     public Uri BaseAddress => new($"https://127.0.0.1:{Port}/");
@@ -119,6 +123,7 @@ internal sealed class RealEkmHost : IAsyncDisposable
         {
             ["Data:Path"] = dataPath,
             ["Endpoints:Ekm:Url"] = "https://127.0.0.1:0",
+            ["Endpoints:Console:Url"] = "https://127.0.0.1:0",
             ["Tls:CertFile"] = options.DevMode ? null : certFile,
             ["Tls:KeyFile"] = options.DevMode ? null : keyFile,
             ["Tls:PollInterval"] = options.PollInterval.ToString("c"),
@@ -183,7 +188,9 @@ internal sealed class RealEkmHost : IAsyncDisposable
         var addresses = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses
             .Select(static a => new Uri(a))
             .ToList();
-        host.Port = addresses.Single(static a => a.Scheme == "https").Port;
+        var listeners = app.Services.GetRequiredService<ListenerRegistry>();
+        host.Port = listeners.PortsOf(ListenerRegistry.EkmName).Single();
+        host.ConsolePort = listeners.PortsOf(ListenerRegistry.ConsoleName).Single();
         host.PlainHttpPort = addresses.SingleOrDefault(static a => a.Scheme == "http")?.Port;
         return host;
     }
@@ -220,6 +227,33 @@ internal sealed class RealEkmHost : IAsyncDisposable
 
     public EkmClient CreateEkmClient(X509Certificate2? clientCertificate = null, bool singleConnection = false, X509Certificate2Collection? clientChain = null)
         => new(CreateHttpClient(clientCertificate, singleConnection, clientChain: clientChain));
+
+    public Uri ConsoleAddress => new($"https://127.0.0.1:{ConsolePort}/");
+
+    /// <summary>
+    /// A client of the console listener (no client certificate; the console shares the test server certificate, which this client verifies against the test server CA).
+    /// Cookies are kept so that antiforgery tokens work; redirects are not followed.
+    /// </summary>
+    public HttpClient CreateConsoleClient(Action<HttpRequestHeaders>? defaultHeaders = null)
+    {
+        var handler = new SocketsHttpHandler
+        {
+            SslOptions = new SslClientAuthenticationOptions
+            {
+                TargetHost = "127.0.0.1",
+                EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
+                RemoteCertificateValidationCallback = ValidateServer,
+            },
+            UseCookies = true,
+            CookieContainer = new System.Net.CookieContainer(),
+            AllowAutoRedirect = false,
+            PooledConnectionLifetime = Timeout.InfiniteTimeSpan,
+        };
+        var client = new HttpClient(handler, disposeHandler: true) { BaseAddress = ConsoleAddress, Timeout = TimeSpan.FromSeconds(20) };
+        defaultHeaders?.Invoke(client.DefaultRequestHeaders);
+        _disposables.Add(client);
+        return client;
+    }
 
     /// <summary>Client TLS options that trust only <see cref="TestPki.ServerCa"/> (custom root trust, hostname checked, no OS trust).</summary>
     public SslClientAuthenticationOptions CreateClientSslOptions(X509Certificate2? clientCertificate = null, SslProtocols protocols = SslProtocols.Tls13, X509Certificate2Collection? clientChain = null)
