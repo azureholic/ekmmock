@@ -45,6 +45,9 @@ internal sealed class RealEkmHostOptions
     /// <summary>Starts with <c>--dev</c> and no <c>Tls:CertFile</c>, so the host generates its own throw-away localhost certificate.</summary>
     public bool DevMode { get; init; }
 
+    /// <summary>Switches key import on (the test equivalent of <c>EKMMOCK_ALLOW_KEY_IMPORT=true</c>), so known key material can be imported for leak scans.</summary>
+    public bool AllowKeyImport { get; init; }
+
     public Action<IServiceCollection>? ConfigureServices { get; init; }
 
     public Dictionary<string, string?> Configuration { get; init; } = [];
@@ -78,6 +81,9 @@ internal sealed class RealEkmHost : IAsyncDisposable
     public string KeyFile { get; }
 
     public string TlsFolder => Path.GetDirectoryName(CertFile)!;
+
+    /// <summary>The data volume of this host (key store, namespaces, audit log, inspector files).</summary>
+    public string DataPath => Path.Combine(_folder.Path, "data");
 
     public CapturingLoggerProvider Logs { get; }
 
@@ -164,6 +170,7 @@ internal sealed class RealEkmHost : IAsyncDisposable
                 DataPath = dataPath,
                 MasterKeyProvider = masterKey,
                 CounterFlushInterval = TimeSpan.Zero,
+                AllowKeyImport = options.AllowKeyImport,
                 Info = new BackendInfo("EkmMock", "EkmMock Software HSM"),
             });
             if (options.AddPlainHttpListener)

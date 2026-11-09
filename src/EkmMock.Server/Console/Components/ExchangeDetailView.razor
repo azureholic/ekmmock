@@ -80,14 +80,18 @@ else
             <CopyButton Text="@ExchangeJson(record)" Title="Copy the exchange as JSON (masked)" Confirmation="Exchange JSON copied (masked)">Copy JSON</CopyButton>
             <FluentButton Appearance="Appearance.Neutral"
                           IconStart="@(new Icons.Regular.Size16.ArrowRepeatAll())"
-                          Disabled="@(!_replay.Possible)"
+                          Disabled="@(!_replay.Possible || _replayBusy)"
                           aria-describedby="replay-hint"
                           data-role="replay"
-                          OnClick="ShowReplayNote">Replay</FluentButton>
+                          OnClick="ReplayAsync">Replay</FluentButton>
             <span id="replay-hint" class="detail-note" data-role="replay-hint">@ReplayTitle</span>
             @if (_replayMessage is { } message)
             {
                 <span class="detail-note" role="status" data-role="replay-message">@message</span>
+                @if (_replayExchangeId is { } replayed)
+                {
+                    <a href="@($"/exchange/{replayed}")" data-role="replay-link">Open the new exchange @replayed</a>
+                }
             }
         </div>
 

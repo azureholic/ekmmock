@@ -1,0 +1,436 @@
+@page "/playground"
+@implements IDisposable
+@using EkmMock.Crypto
+@using EkmMock.Server.Inspector
+@inject PlaygroundService Playground
+@inject KeyAdminService Keys
+@inject NamespaceAdminService Namespaces
+@inject IConsoleUser CurrentUser
+@inject IToastService Toasts
+@inject TimeProvider Time
+
+<PageTitle>Playground - EkmMock console</PageTitle>
+
+<h1 tabindex="-1">Playground</h1>
+<p class="page-intro">Wrap and unwrap by hand. <strong>Direct</strong> calls the engine in this process (not EKM traffic). <strong>Via EKM endpoint</strong> sends a real mutual-TLS request to the EKM listener with the console test certificate, so it shows up in <a href="/">Live traffic</a> like any Managed HSM call. Secrets are shown as length and fingerprint only.</p>
+
+<div role="status" aria-live="polite" data-role="messages">
+    @if (_message is { } message)
+    {
+        <ConsoleAlert Intent="message.Intent" DataRole="action-result" OnDismiss="DismissMessage">@message.Text</ConsoleAlert>
+    }
+</div>
+
+@if (_needsTrust is { } trustNs)
+{
+    <ConsoleAlert Intent="AlertIntent.Warning" Title="The namespace does not trust the console test client" DataRole="trust-hint">
+        Namespace <code>@trustNs</code> must trust the console test CA (CN <code>@ConsoleTestIdentity.CommonName</code>) before the EKM endpoint accepts the playground's requests.
+        <FluentButton Appearance="Appearance.Neutral" OnClick="TrustAsync" data-role="trust-test-client">Trust the test CA in @trustNs</FluentButton>
+    </ConsoleAlert>
+}
+
+<section class="dashboard-card form-card" aria-labelledby="pg-title" data-role="playground-form">
+    <h2 id="pg-title" class="card-title">Request</h2>
+    <fieldset class="mode-field">
+        <legend>Mode</legend>
+        <FluentRadioGroup TValue="string" @bind-Value="_mode" Orientation="Orientation.Horizontal" data-role="mode">
+            <FluentRadio TValue="string" Value="@("direct")" data-role="mode-direct">Direct (engine, in process)</FluentRadio>
+            <FluentRadio TValue="string" Value="@("ekm")" data-role="mode-ekm">Via EKM endpoint (real HTTPS request)</FluentRadio>
+        </FluentRadioGroup>
+    </fieldset>
+
+    @if (_namespaceNames.Count == 0)
+    {
+        <p class="chart-empty" data-role="no-namespaces">There is no namespace yet. Create one on the <a href="/namespaces">Namespaces &amp; trust</a> page.</p>
+    }
+    else
+    {
+        <div class="form-grid">
+            <div class="filter-field">
+                <FluentSelect TOption="string" Label="Namespace" Items="@_namespaceNames" SelectedOption="_namespace" SelectedOptionChanged="OnNamespaceChanged" OptionText="@(n => n)" OptionValue="@(n => n)" data-role="namespace" />
+            </div>
+            <div class="filter-field">
+                <FluentSelect TOption="string" Label="Key" Items="@_keyNames" SelectedOption="_key" SelectedOptionChanged="OnKeyChanged" OptionText="@(k => k)" OptionValue="@(k => k)" data-role="key" />
+            </div>
+            <div class="filter-field">
+                <FluentSelect TOption="string" Label="Algorithm" Items="@_algorithms" @bind-SelectedOption="_algorithm" OptionText="@(a => a)" OptionValue="@(a => a)" data-role="algorithm" />
+            </div>
+        </div>
+        @if (_keyNames.Count == 0)
+        {
+            <p class="chart-empty" data-role="no-keys">This namespace has no usable keys. Create one on the <a href="/keys">Keys</a> page.</p>
+        }
+
+        <h3>Input</h3>
+        <div class="form-grid">
+            <div class="filter-field">
+                <FluentSelect TOption="string" Label="DEK input" Items="@InputKinds" @bind-SelectedOption="_inputKind" OptionText="@(k => InputKindText(k))" OptionValue="@(k => k)" data-role="input-kind" />
+            </div>
+            @if (_inputKind == "random")
+            {
+                <div class="filter-field">
+                    <FluentNumberField TValue="int" @bind-Value="_randomBytes" Label="Random length (bytes)" Min="1" Max="4096" data-role="random-bytes" />
+                </div>
+            }
+            else
+            {
+                <div class="filter-field wide">
+                    <FluentTextArea @bind-Value="_input" Label="@(_inputKind == "hex" ? "DEK (hex)" : "DEK (base64url)")" Rows="2" Spellcheck="false" AutoComplete="off" data-role="input" />
+                </div>
+            }
+        </div>
+        <div class="inline-form">
+            <FluentButton Appearance="Appearance.Accent" Disabled="@(!CanRun || _busy)" OnClick="WrapAsync" data-role="wrap">Wrap</FluentButton>
+        </div>
+        <p class="detail-note">Your DEK is cleared from this page as soon as it is sent. To unwrap a value you already have, paste it below.</p>
+
+        <h3>Unwrap a value</h3>
+        <div class="form-grid">
+            <div class="filter-field">
+                <FluentSelect TOption="string" Label="Wrapped value format" Items="@WrappedKinds" @bind-SelectedOption="_wrappedKind" OptionText="@(k => k == "hex" ? "hex" : "base64url")" OptionValue="@(k => k)" data-role="wrapped-kind" />
+            </div>
+            <div class="filter-field wide">
+                <FluentTextArea @bind-Value="_wrappedInput" Label="Wrapped value" Rows="2" Spellcheck="false" AutoComplete="off" data-role="wrapped-input" />
+            </div>
+        </div>
+        <FluentButton Appearance="Appearance.Neutral" Disabled="@(!CanRun || _busy)" OnClick="UnwrapInputAsync" data-role="unwrap">Unwrap</FluentButton>
+    }
+</section>
+
+@if (_result is { } result)
+{
+    <section class="dashboard-card" aria-labelledby="result-title" data-role="result" data-ok="@(result.Ok ? "true" : "false")" data-operation="@result.Operation">
+        <h2 id="result-title" class="card-title">Result of @result.Operation (@(result.Target.Mode == PlaygroundMode.Direct ? "direct" : "via EKM endpoint"))</h2>
+        @if (!result.Ok)
+        {
+            <ConsoleAlert Intent="AlertIntent.Error" Title="@($"{result.ErrorCode}{(result.HttpStatus is { } st ? $" (HTTP {st})" : string.Empty)}")" DataRole="result-error">@result.Message</ConsoleAlert>
+        }
+        else
+        {
+            <dl class="detail-grid">
+                <dt>Target</dt><dd>@result.Target.Namespace / @result.Target.Key, @result.Target.Algorithm</dd>
+                @if (result.HttpStatus is { } status)
+                {
+                    <dt>HTTP status</dt><dd class="status-ok" data-role="http-status">@status OK</dd>
+                }
+                @if (result.InputFingerprint is not null)
+                {
+                    <dt>DEK that was wrapped</dt><dd data-role="input-fingerprint">@SecretFingerprint.Display(result.InputBytes ?? 0, result.InputFingerprint)</dd>
+                }
+                @if (result.WrappedValue is { } wrapped)
+                {
+                    <dt>Wrapped value (@wrapped.Length bytes)</dt>
+                    <dd class="wrap-anywhere"><code data-role="wrapped-value">@System.Buffers.Text.Base64Url.EncodeToString(wrapped)</code> <CopyButton Text="@System.Buffers.Text.Base64Url.EncodeToString(wrapped)" Title="Copy the wrapped value" Confirmation="Wrapped value copied" /></dd>
+                }
+                @if (result.ResultFingerprint is not null)
+                {
+                    <dt>Unwrapped DEK</dt><dd data-role="result-fingerprint">@SecretFingerprint.Display(result.ResultBytes ?? 0, result.ResultFingerprint)</dd>
+                }
+                <dt>Time</dt><dd data-role="elapsed">@ConsoleDisplay.Milliseconds(result.ElapsedMs)</dd>
+            </dl>
+
+            @if (result.RoundTripMatches is { } matches)
+            {
+                <ConsoleAlert Intent="@(matches ? AlertIntent.Success : AlertIntent.Error)" Title="@(matches ? "Round trip proven" : "Round trip FAILED")" DataRole="roundtrip">
+                    @(matches ? "The fingerprint of the unwrapped DEK equals the fingerprint of the DEK that was wrapped." : "The unwrapped DEK differs from the DEK that was wrapped.")
+                </ConsoleAlert>
+            }
+
+            @if (result.WrappedValue is not null)
+            {
+                <FluentButton Appearance="Appearance.Accent" Disabled="@_busy" OnClick="UnwrapResultAsync" data-role="unwrap-result">Unwrap this result</FluentButton>
+            }
+
+            @if (result.SecretValue is not null && Playground.RevealAllowed)
+            {
+                <FluentButton Appearance="Appearance.Neutral" OnClick="RevealAsync" data-role="reveal">Reveal the DEK (audited)</FluentButton>
+            }
+            @if (_revealed is { } revealed)
+            {
+                <div class="revealed" data-role="revealed">
+                    <p class="detail-note">Shown for @RevealSeconds seconds, kept only in this page's memory, never stored or exported.</p>
+                    <code class="revealed-value" data-role="revealed-base64url">@revealed.Base64Url</code>
+                    <code class="revealed-value" data-role="revealed-hex">@revealed.Hex</code>
+                    <FluentButton Appearance="Appearance.Lightweight" OnClick="HideRevealed" data-role="reveal-hide">Hide</FluentButton>
+                </div>
+            }
+        }
+
+        @if (result.CorrelationId is not null)
+        {
+            <h3>EKM request</h3>
+            <dl class="detail-grid" data-role="ekm-ids">
+                <dt>request_id</dt><dd><code data-role="request-id">@result.RequestId</code></dd>
+                <dt>correlation_id</dt><dd><code data-role="correlation-id">@result.CorrelationId</code> <CopyButton Text="@result.CorrelationId" Title="Copy correlation_id" Confirmation="correlation_id copied" /></dd>
+                <dt>pool_name</dt><dd><code>@PlaygroundService.PoolName</code></dd>
+                <dt>Live traffic</dt>
+                <dd>
+                    @if (result.ExchangeId is { } exchange)
+                    {
+                        <a href="@($"/exchange/{exchange}")" data-role="exchange-link">Open exchange @exchange</a>
+                    }
+                    else
+                    {
+                        <span class="detail-note" data-role="exchange-missing">The exchange is not (yet) in the inspector.</span>
+                    }
+                </dd>
+            </dl>
+        }
+    </section>
+}
+
+@code {
+    private sealed record Message(AlertIntent Intent, string Text);
+
+    internal const int RevealSeconds = 30;
+
+    private static readonly string[] InputKinds = ["random", "hex", "base64url"];
+    private static readonly string[] WrappedKinds = ["base64url", "hex"];
+
+    private List<string> _namespaceNames = [];
+    private List<string> _keyNames = [];
+    private List<string> _algorithms = [];
+    private Dictionary<string, KeyView> _keysByName = [];
+    private string? _namespace;
+    private string? _key;
+    private string? _algorithm;
+    private string _mode = "direct";
+    private string _inputKind = InputKinds[0];
+    private int _randomBytes = 32;
+    private string? _input = string.Empty;
+    private string _wrappedKind = WrappedKinds[0];
+    private string? _wrappedInput = string.Empty;
+    private PlaygroundResult? _result;
+    private (string Base64Url, string Hex)? _revealed;
+    private ITimer? _hideTimer;
+    private Message? _message;
+    private string? _needsTrust;
+    private bool _busy;
+    private string? _lastDekFingerprint;
+    private int? _lastDekBytes;
+
+    private bool CanRun => !string.IsNullOrEmpty(_namespace) && !string.IsNullOrEmpty(_key) && !string.IsNullOrEmpty(_algorithm);
+
+    protected override void OnInitialized()
+    {
+        try
+        {
+            _namespaceNames = [.. Namespaces.List().Select(static n => n.Name)];
+        }
+        catch (ConsoleActionException exception)
+        {
+            _message = new Message(AlertIntent.Error, exception.Message);
+        }
+
+        _namespace = _namespaceNames.FirstOrDefault();
+        LoadKeys();
+    }
+
+    private void LoadKeys()
+    {
+        _keyNames = [];
+        _keysByName = [];
+        if (_namespace is not null)
+        {
+            try
+            {
+                foreach (var key in Keys.List(_namespace).Where(static k => !k.IsDestroyed))
+                {
+                    _keysByName[key.Name] = key;
+                }
+            }
+            catch (ConsoleActionException exception)
+            {
+                _message = new Message(AlertIntent.Error, exception.Message);
+            }
+        }
+
+        _keyNames = [.. _keysByName.Keys.Order(StringComparer.Ordinal)];
+        _key = _keyNames.Contains(_key ?? string.Empty) ? _key : _keyNames.FirstOrDefault();
+        LoadAlgorithms();
+    }
+
+    private void LoadAlgorithms()
+    {
+        var type = _key is not null && _keysByName.TryGetValue(_key, out var key) && key.IsRsa ? KeyType.Rsa : KeyType.Oct;
+        _algorithms = _key is null ? [] : [.. PlaygroundInput.AlgorithmsFor(type).Select(static a => a.ToWireName())];
+        _algorithm = _algorithms.Contains(_algorithm ?? string.Empty) ? _algorithm : _algorithms.FirstOrDefault();
+    }
+
+    private void OnNamespaceChanged(string? value)
+    {
+        _namespace = value;
+        LoadKeys();
+    }
+
+    private void OnKeyChanged(string? value)
+    {
+        _key = value;
+        LoadAlgorithms();
+    }
+
+    private void DismissMessage() => _message = null;
+
+    private static string InputKindText(string kind) => kind switch
+    {
+        "random" => "Generate random bytes",
+        "hex" => "Hex",
+        _ => "base64url",
+    };
+
+    private PlaygroundTarget Target() => new(_mode == "ekm" ? PlaygroundMode.ViaEkm : PlaygroundMode.Direct, _namespace!, _key!, _algorithm!);
+
+    private async Task<string> ActorAsync() => (await CurrentUser.GetAsync()).AuditName;
+
+    private void SetResult(PlaygroundResult? result)
+    {
+        HideRevealed();
+        _result?.Dispose();
+        _result = result;
+        _needsTrust = result is { NeedsTestClientTrust: true } ? result.Target.Namespace : null;
+    }
+
+    private async Task WrapAsync()
+    {
+        _message = null;
+        var kind = _inputKind == "hex" ? DekInputKind.Hex : _inputKind == "base64url" ? DekInputKind.Base64Url : DekInputKind.Random;
+        var text = _input;
+        _input = string.Empty; // the typed DEK leaves component state before anything is sent
+        byte[]? dek = null;
+        _busy = true;
+        try
+        {
+            dek = PlaygroundInput.Parse(kind, text, _randomBytes);
+            text = null;
+            var result = await Playground.WrapAsync(await ActorAsync(), Target(), dek);
+            _lastDekFingerprint = result.InputFingerprint;
+            _lastDekBytes = result.InputBytes;
+            SetResult(result);
+        }
+        catch (ConsoleActionException exception)
+        {
+            _message = new Message(AlertIntent.Error, exception.Message);
+        }
+        finally
+        {
+            if (dek is not null)
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(dek);
+            }
+
+            _busy = false;
+        }
+    }
+
+    private async Task UnwrapInputAsync()
+    {
+        _message = null;
+        var kind = _wrappedKind == "hex" ? DekInputKind.Hex : DekInputKind.Base64Url;
+        byte[]? wrapped = null;
+        _busy = true;
+        try
+        {
+            wrapped = PlaygroundInput.Parse(kind, _wrappedInput);
+            // A pasted wrapped value has no known original: no fingerprint comparison.
+            SetResult(await Playground.UnwrapAsync(await ActorAsync(), Target(), wrapped));
+        }
+        catch (ConsoleActionException exception)
+        {
+            _message = new Message(AlertIntent.Error, exception.Message);
+        }
+        finally
+        {
+            if (wrapped is not null)
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(wrapped);
+            }
+
+            _busy = false;
+        }
+    }
+
+    private async Task UnwrapResultAsync()
+    {
+        if (_result?.WrappedValue is not { } wrapped)
+        {
+            return;
+        }
+
+        _message = null;
+        _busy = true;
+        try
+        {
+            // The same mode, namespace, key and algorithm as the wrap, and the fingerprint of the wrapped DEK to compare with.
+            var target = _result.Target;
+            SetResult(await Playground.UnwrapAsync(await ActorAsync(), target, wrapped, _lastDekBytes, _lastDekFingerprint));
+        }
+        catch (ConsoleActionException exception)
+        {
+            _message = new Message(AlertIntent.Error, exception.Message);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task TrustAsync()
+    {
+        if (_needsTrust is not { } ns)
+        {
+            return;
+        }
+
+        try
+        {
+            Namespaces.TrustConsoleTestClient(await ActorAsync(), ns);
+            _needsTrust = null;
+            _message = new Message(AlertIntent.Success, $"The console test CA is now trusted in {ns}. Run the request again.");
+            Toasts.ShowSuccess("Test CA trusted");
+        }
+        catch (ConsoleActionException exception)
+        {
+            _message = new Message(AlertIntent.Error, exception.Message);
+        }
+    }
+
+    private async Task RevealAsync()
+    {
+        if (_result is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _revealed = Playground.Reveal(await ActorAsync(), _result);
+            _hideTimer?.Dispose();
+            _hideTimer = Time.CreateTimer(_ => AutoHide(), null, TimeSpan.FromSeconds(RevealSeconds), Timeout.InfiniteTimeSpan);
+        }
+        catch (ConsoleActionException exception)
+        {
+            _revealed = null;
+            _message = new Message(AlertIntent.Error, exception.Message);
+        }
+    }
+
+    private void AutoHide() => _ = InvokeAsync(() =>
+    {
+        HideRevealed();
+        StateHasChanged();
+    });
+
+    private void HideRevealed()
+    {
+        _hideTimer?.Dispose();
+        _hideTimer = null;
+        _revealed = null;
+    }
+
+    public void Dispose()
+    {
+        HideRevealed();
+        _result?.Dispose();
+        _result = null;
+    }
+}

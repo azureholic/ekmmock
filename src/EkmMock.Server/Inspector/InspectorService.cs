@@ -482,7 +482,7 @@ internal sealed class InspectorService : IInspector
 
         if (_replaySender is null)
         {
-            return new ReplayOutcome(false, null, "No replay sender is registered; the console test client arrives with M6.");
+            return new ReplayOutcome(false, null, "No replay sender is registered.");
         }
 
         var record = _ring.Get(exchangeId) ?? throw new InspectorReplayException(ReplayBlockReason.ExchangeNotFound);

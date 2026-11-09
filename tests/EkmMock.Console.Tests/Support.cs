@@ -168,6 +168,10 @@ internal sealed class FakeInspector : IInspector
 
     public ReplayCheck Replay { get; set; } = new(false, ReplayBlockReason.RevealNotAllowed);
 
+    public ReplayOutcome ReplayResult { get; set; } = new(true, 200, null);
+
+    public List<(long ExchangeId, string User)> Replays { get; } = [];
+
     public bool ThrowOnQuery { get; set; }
 
     public IInspectorFeed Feed => _feed;
@@ -257,7 +261,10 @@ internal sealed class FakeInspector : IInspector
     public ReplayCheck CanReplay(long exchangeId) => Replay;
 
     public Task<ReplayOutcome> ReplayAsync(long exchangeId, string user, CancellationToken cancellationToken = default)
-        => throw new NotSupportedException("Replay is not implemented in M5 and the console must not call it.");
+    {
+        Replays.Add((exchangeId, user));
+        return Task.FromResult(ReplayResult);
+    }
 
     public Task ExportAsync(Stream destination, ExportFormat format, ExchangeFilter? filter = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
 }

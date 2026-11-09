@@ -81,7 +81,8 @@ internal sealed class ConsoleTestHost : IAsyncDisposable
         bool allowReveal = false,
         bool plainListener = false,
         string? groupId = null,
-        Dictionary<string, string?>? configuration = null)
+        Dictionary<string, string?>? configuration = null,
+        bool allowKeyImport = false)
     {
         if (entra)
         {
@@ -117,6 +118,7 @@ internal sealed class ConsoleTestHost : IAsyncDisposable
         {
             Pki = pki,
             AddPlainHttpListener = plainListener,
+            AllowKeyImport = allowKeyImport,
             Configuration = config,
             Namespaces = [TestNamespace.Default(pki.ClientCaA, ClientCn)],
             ConfigureServices = services =>

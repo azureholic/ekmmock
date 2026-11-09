@@ -176,4 +176,13 @@ internal sealed class ListenerRegistry
             return [.. _listeners.Where(l => l.Name == name).Select(static l => l.Options.IPEndPoint?.Port ?? 0).Where(static p => p > 0)];
         }
     }
+
+    /// <summary>The bound addresses (with the port the OS actually assigned) of an endpoint.</summary>
+    public IReadOnlyList<System.Net.IPEndPoint> EndpointsOf(string name)
+    {
+        lock (_gate)
+        {
+            return [.. _listeners.Where(l => l.Name == name).Select(static l => l.Options.IPEndPoint).Where(static e => e is { Port: > 0 })!];
+        }
+    }
 }

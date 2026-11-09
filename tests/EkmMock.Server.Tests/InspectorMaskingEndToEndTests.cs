@@ -5,6 +5,7 @@ using System.Text.Json;
 using EkmMock.Crypto;
 using EkmMock.Server.Inspector;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace EkmMock.Server.Tests;
 
@@ -361,6 +362,7 @@ public sealed class InspectorMaskingEndToEndTests
 }
 
 /// <summary>Spec 8.4 and 14 test 23: reveal is impossible without the environment flag, and every reveal is audited.</summary>
+[Collection(ProcessEnvironmentCollection.Name)]
 public sealed class InspectorRevealTests
 {
     private const string Alg = "A256KWP";
@@ -707,7 +709,7 @@ public sealed class InspectorRevealTests
     [Fact]
     public async Task Replay_WithoutASender_SaysSo_AndSendsNothing()
     {
-        using var factory = InspectorHarness.CreateFactory(reveal: true);
+        using var factory = InspectorHarness.CreateFactory(reveal: true, configure: static services => services.RemoveAll<IReplaySender>());
         var inspector = InspectorHarness.InspectorOf(factory);
         await factory.CreateEkmClient().InfoAsync();
         await InspectorHarness.SettleAsync(inspector, 1);
@@ -715,7 +717,7 @@ public sealed class InspectorRevealTests
         var outcome = await inspector.ReplayAsync(1, "alice", TestContext.Current.CancellationToken);
 
         outcome.Sent.ShouldBeFalse();
-        outcome.Note.ShouldNotBeNull().ShouldContain("M6");
+        outcome.Note.ShouldNotBeNull().ShouldContain("No replay sender");
         inspector.Count().ShouldBe(1);
     }
 }

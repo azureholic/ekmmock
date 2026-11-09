@@ -40,7 +40,7 @@ internal sealed class RealConsoleHost : IAsyncDisposable
 
     public IInspector Inspector => App.Services.GetRequiredService<IInspector>();
 
-    public static async Task<RealConsoleHost> StartAsync()
+    public static async Task<RealConsoleHost> StartAsync(bool allowReveal = false)
     {
         var pki = new TestPki();
         var folder = new TempFolder("ekmmock-console-host");
@@ -67,6 +67,12 @@ internal sealed class RealConsoleHost : IAsyncDisposable
             builder.Logging.ClearProviders();
             builder.Logging.SetMinimumLevel(LogLevel.Warning);
             builder.Services.AddSingleton<IMasterKeyProvider>(masterKey);
+            if (allowReveal)
+            {
+                // The test equivalent of EKMMOCK_INSPECTOR_ALLOW_REVEAL=true: raw request bodies are retained, so replay is possible.
+                builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?> { ["Inspector:SecretDisplay"] = "Reveal" });
+                builder.Services.AddSingleton<IInspectorRevealGate>(new OpenRevealGate());
+            }
             builder.Services.AddSingleton(new SoftwareCryptoBackendOptions
             {
                 DataPath = dataPath,
@@ -151,4 +157,10 @@ internal sealed class RealConsoleHost : IAsyncDisposable
         _folder.Dispose();
         _pki.Dispose();
     }
+}
+
+/// <summary>An open reveal gate (a stand-in for the environment flag), so that the raw request bodies are retained.</summary>
+internal sealed class OpenRevealGate : IInspectorRevealGate
+{
+    public bool IsAllowed => true;
 }

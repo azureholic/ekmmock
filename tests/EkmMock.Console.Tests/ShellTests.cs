@@ -33,7 +33,7 @@ public sealed class ShellTests : ConsoleTestBase
         banner.GetAttribute("role").ShouldBe("alert");
         Text(banner).ShouldContain("DEV MODE: throw-away master key");
         Text(banner).ShouldContain("Never protect real data");
-        banner.InnerHtml.ShouldContain("intent-error"); // the Fluent message bar in its error intent (red, with an icon and a title)
+        banner.ClassList.ShouldContain("intent-error"); // the error alert: red tint, icon and a title; text uses the normal foreground token (WCAG AA in both themes)
     }
 
     [Fact]
@@ -99,17 +99,17 @@ public sealed class ShellTests : ConsoleTestBase
     }
 
     [Fact]
-    public void TheNavigation_LinksTheThreePages_AsKeyboardReachableAnchors()
+    public void TheNavigation_LinksEveryBuiltPage_AsKeyboardReachableAnchors()
     {
         var cut = Layout();
         var nav = cut.Find("nav[aria-label='Console sections']");
 
         var links = nav.QuerySelectorAll("a[href]").ToList();
 
-        links.Select(static a => a.GetAttribute("href")).ShouldBe(["/", "/connections", "/dashboard"]);
-        links.Select(static a => Text(a)).ShouldBe(["Live traffic", "Connections", "Dashboard"]);
+        links.Select(static a => a.GetAttribute("href")).ShouldBe(["/", "/connections", "/dashboard", "/keys", "/namespaces", "/certificates", "/playground", "/audit", "/about"]);
+        links.Select(static a => Text(a)).ShouldBe(["Live traffic", "Connections", "Dashboard", "Keys", "Namespaces & trust", "Certificates", "Playground", "Audit log", "About"]);
         links.ShouldAllBe(static a => a.GetAttribute("tabindex") != "-1", "every enabled link is in the tab order");
-        nav.QuerySelectorAll("[data-nav]").Select(static n => n.GetAttribute("data-nav")).ShouldBe(["live", "connections", "dashboard"]);
+        nav.QuerySelectorAll("[data-nav]").Select(static n => n.GetAttribute("data-nav")).ShouldBe(["live", "connections", "dashboard", "keys", "namespaces", "certificates", "playground", "audit", "about"]);
     }
 
     [Fact]
@@ -118,11 +118,11 @@ public sealed class ShellTests : ConsoleTestBase
         var cut = Layout();
         var placeholders = cut.FindAll("[data-nav-placeholder]");
 
-        placeholders.Count.ShouldBe(7);
-        placeholders.Select(static p => p.GetAttribute("data-nav-placeholder")).Distinct().Order().ShouldBe(["M6", "M7"]);
+        placeholders.Count.ShouldBe(1);
+        placeholders.Select(static p => p.GetAttribute("data-nav-placeholder")).Distinct().Order().ShouldBe(["M7"]);
         placeholders.ShouldAllBe(static p => Text(p).Contains("coming in M", StringComparison.Ordinal));
         placeholders.ShouldAllBe(static p => p.HasAttribute("disabled") || p.GetAttribute("aria-disabled") == "true" || p.QuerySelector("a[href]") == null);
-        placeholders.Select(static p => Text(p)).ShouldContain(static t => t.StartsWith("Keys", StringComparison.Ordinal));
+        // Keys, Namespaces & trust, Certificates, Playground, Audit log and About are real pages since M6; only Fault injection (M7) is still a placeholder.
         placeholders.Select(static p => Text(p)).ShouldContain(static t => t.StartsWith("Fault injection", StringComparison.Ordinal));
     }
 
@@ -134,7 +134,7 @@ public sealed class ShellTests : ConsoleTestBase
         var cut = context.Render<NavMenu>();
 
         cut.FindAll("[data-nav-placeholder]").ShouldBeEmpty();
-        cut.FindAll("[data-nav]").Count.ShouldBe(3);
+        cut.FindAll("[data-nav]").Count.ShouldBe(9);
     }
 
     // ---- theme ----
@@ -211,7 +211,7 @@ public sealed class ShellTests : ConsoleTestBase
 
         cut.Find("[data-role='page-error']").ShouldNotBeNull();
         cut.Markup.ShouldNotContain("boom (test)");
-        cut.Find("nav[aria-label='Console sections']").QuerySelectorAll("a[href]").Count.ShouldBe(3);
+        cut.Find("nav[aria-label='Console sections']").QuerySelectorAll("a[href]").Count.ShouldBe(9);
         cut.Find("header.console-header").ShouldNotBeNull();
 
         InspectorFake.ThrowOnQuery = false;

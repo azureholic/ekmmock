@@ -1,0 +1,46 @@
+@* An accessible, theme-aware alert (WCAG AA): the text always uses the normal foreground token on a light tint of the status colour, so it is readable in light and dark;
+   the status colour appears as border and icon only, never as the only carrier of meaning (there is always a title or word). Replaces FluentMessageBar for banners and
+   page messages: the Fluent bar rendered washed-out text on its pale red background in the light theme (found in the M5 visual review). *@
+<div class="console-alert intent-@IntentName @Class"
+     role="@(Intent is AlertIntent.Error or AlertIntent.Warning ? "alert" : "status")"
+     data-role="@DataRole"
+     @attributes="AdditionalAttributes">
+    <span class="alert-icon" aria-hidden="true"><FluentIcon Value="@IconFor(Intent)" Color="Color.Custom" CustomColor="currentColor" /></span>
+    <div class="alert-body">
+        @if (!string.IsNullOrEmpty(Title))
+        {
+            <strong class="alert-title">@Title</strong>
+        }
+        @ChildContent
+    </div>
+    @if (OnDismiss.HasDelegate)
+    {
+        <button type="button" class="alert-dismiss" aria-label="Dismiss" data-role="alert-dismiss" @onclick="OnDismiss">Dismiss</button>
+    }
+</div>
+
+@code {
+    [Parameter] public AlertIntent Intent { get; set; } = AlertIntent.Info;
+
+    [Parameter] public string? Title { get; set; }
+
+    [Parameter] public string? DataRole { get; set; }
+
+    [Parameter] public string? Class { get; set; }
+
+    [Parameter] public EventCallback OnDismiss { get; set; }
+
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    [Parameter(CaptureUnmatchedValues = true)] public Dictionary<string, object>? AdditionalAttributes { get; set; }
+
+    private string IntentName => Intent.ToString().ToLowerInvariant();
+
+    private static Icon IconFor(AlertIntent intent) => intent switch
+    {
+        AlertIntent.Error => new Icons.Filled.Size20.DismissCircle(),
+        AlertIntent.Warning => new Icons.Filled.Size20.Warning(),
+        AlertIntent.Success => new Icons.Filled.Size20.CheckmarkCircle(),
+        _ => new Icons.Filled.Size20.Info(),
+    };
+}

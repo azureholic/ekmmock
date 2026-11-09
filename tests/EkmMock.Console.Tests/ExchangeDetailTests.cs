@@ -476,16 +476,20 @@ public sealed class ExchangeDetailTests : ConsoleTestBase
     }
 
     [Fact]
-    public void Replay_IsEnabledWhenPossible_AndNotImplementedUntilM6_ItDoesNotFakeAReplay()
+    public void Replay_IsEnabledWhenPossible_AndSendsTheExchangeThroughTheInspector_AsTheCurrentUser()
     {
         InspectorFake.Publish(Rec.Make(1));
         InspectorFake.Replay = new ReplayCheck(true, ReplayBlockReason.None);
         var cut = Open(1);
         cut.Find("[data-role='replay']").HasAttribute("disabled").ShouldBeFalse();
 
-        cut.Find("[data-role='replay']").Click(); // FakeInspector.ReplayAsync throws if the console ever calls it
+        InspectorFake.ReplayResult = new ReplayOutcome(true, 200, null);
 
-        cut.Find("[data-role='replay-message']").TextContent.ShouldBe("Replay is implemented in M6.");
+        cut.Find("[data-role='replay']").Click();
+
+        InspectorFake.Replays.Count.ShouldBe(1);
+        InspectorFake.Replays[0].ExchangeId.ShouldBe(1);
+        cut.WaitForAssertion(() => cut.Find("[data-role='replay-message']").TextContent.ShouldContain("200"), TimeSpan.FromSeconds(10));
     }
 
     // ---- the page and the leak scan ----

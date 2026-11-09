@@ -151,6 +151,8 @@ internal static class ConsoleApi
             }
         }).AddEndpointFilter<AntiforgeryEndpointFilter>();
 
+        api.MapConsoleAdminApi();
+
         api.MapGet("/connections", (HttpContext context, IInspectorQuery inspector) =>
         {
             var query = context.Request.Query;

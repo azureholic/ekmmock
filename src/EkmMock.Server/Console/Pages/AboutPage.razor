@@ -1,0 +1,146 @@
+@page "/about"
+@inject IAboutService About
+
+<PageTitle>About - EkmMock console</PageTitle>
+
+<h1 tabindex="-1">About and settings</h1>
+<p class="page-intro">What this instance is, how it is configured and whether its self-test passed. Secrets are never shown: only whether they are set.</p>
+
+@if (_info is { } info)
+{
+    <section class="dashboard-card" aria-labelledby="ver-title" data-role="about-version">
+        <h2 id="ver-title" class="card-title">EkmMock <span data-role="version">@info.Version</span></h2>
+        <p class="detail-note">A software HSM simulator for Azure Key Vault Managed HSM external key management. Not an HSM: keys live in software and are protected at rest by the master key only. Never protect real data with it.</p>
+        <dl class="stat-list">
+            <dt>Console authentication</dt><dd data-role="auth-mode">@info.AuthMode</dd>
+            <dt>Dev mode</dt><dd data-role="dev-mode">@(info.DevMode ? "on" : "off")</dd>
+            <dt>Key import (test vectors)</dt><dd data-role="key-import">@(info.KeyImportEnabled ? "enabled (EKMMOCK_ALLOW_KEY_IMPORT=true)" : "disabled")</dd>
+            <dt>Reveal of secrets</dt><dd data-role="reveal">@(info.RevealAllowed ? "allowed (audited)" : "not allowed: secrets are masked")</dd>
+        </dl>
+    </section>
+
+    <section class="dashboard-card" aria-labelledby="mk-title" data-role="master-key">
+        <h2 id="mk-title" class="card-title">Master key</h2>
+        @if (info.MasterKey.DevMode)
+        {
+            <ConsoleAlert Intent="AlertIntent.Error" Title="DEV MODE: throw-away master key" DataRole="master-key-dev">@info.MasterKey.Description</ConsoleAlert>
+        }
+        else
+        {
+            <p data-role="master-key-state"><span class="status-ok">✔ Loaded</span> from <code>@info.MasterKey.Source</code>. @info.MasterKey.Description</p>
+        }
+    </section>
+
+    <section class="dashboard-card" aria-labelledby="st-title" data-role="self-test">
+        <h2 id="st-title" class="card-title">Self-test</h2>
+        @if (info.SelfTest.RanAt is null)
+        {
+            <p class="chart-empty">The startup self-test has not run yet.</p>
+        }
+        else
+        {
+            <p data-role="self-test-summary" class="@(info.SelfTest.Passed ? "status-ok" : "status-server")">
+                @(info.SelfTest.Passed ? "✔ All checks passed" : $"✖ {info.SelfTest.Failing.Count} check(s) FAILED")
+                <span class="detail-note">ran @ConsoleDisplay.FullTime(info.SelfTest.RanAt.Value)@(info.SelfTest.Strict ? ", strict: a failure stops the start" : ", not strict: a failing algorithm or key is switched off")</span>
+            </p>
+            @if (!info.SelfTest.Passed)
+            {
+                <ConsoleAlert Intent="AlertIntent.Error" Title="Failing algorithms or keys" DataRole="self-test-failures">@string.Join(", ", info.SelfTest.Failing). Wrap and unwrap for them answer 400 UnsupportedAlgorithm or 503 HsmUnavailable.</ConsoleAlert>
+            }
+
+            <table class="header-table" data-role="self-test-table" aria-label="Self-test results">
+                <thead><tr><th scope="col">Check</th><th scope="col">Result</th><th scope="col">Duration</th><th scope="col">Note</th></tr></thead>
+                <tbody>
+                    @foreach (var testCase in info.SelfTest.Cases)
+                    {
+                        <tr data-case="@testCase.Name" data-outcome="@testCase.Outcome" class="@(testCase.Outcome == "Failed" ? "row-failed" : null)">
+                            <td>@testCase.Name</td>
+                            <td class="@(testCase.Outcome == "Failed" ? "status-server" : testCase.Outcome == "Passed" ? "status-ok" : "status-other")">@(testCase.Outcome == "Failed" ? "✖ Failed" : testCase.Outcome == "Passed" ? "✔ Passed" : "Skipped")</td>
+                            <td>@ConsoleDisplay.Milliseconds(testCase.DurationMs)</td>
+                            <td>@testCase.Error</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </section>
+
+    <div class="dashboard-grid">
+        <section class="dashboard-card" aria-labelledby="data-title" data-role="data-volume">
+            <h2 id="data-title" class="card-title">Data volume</h2>
+            <p>Path: <code data-role="data-path">@info.Data.Path</code></p>
+            <table class="header-table" aria-label="Data volume contents">
+                <thead><tr><th scope="col">Item</th><th scope="col">Size</th><th scope="col">Files</th></tr></thead>
+                <tbody>
+                    @foreach (var entry in info.Data.Entries)
+                    {
+                        <tr data-entry="@entry.Name"><td>@entry.Name</td><td>@(entry.Exists ? ConsoleDisplay.Bytes(entry.Bytes) : "not present")</td><td>@(entry.Exists ? entry.Files : 0)</td></tr>
+                    }
+                </tbody>
+            </table>
+        </section>
+
+        <section class="dashboard-card" aria-labelledby="net-title" data-role="listeners">
+            <h2 id="net-title" class="card-title">Listeners and TLS policy</h2>
+            <dl class="stat-list">
+                @foreach (var listener in info.Listeners)
+                {
+                    <dt>@listener.Name</dt><dd data-role="listener">@listener.Configured (bound: @(listener.BoundPorts.Count == 0 ? "not yet" : string.Join(", ", listener.BoundPorts)))</dd>
+                }
+                <dt>Protocol</dt><dd>@info.Tls.Protocol</dd>
+                <dt>Cipher suites</dt><dd>@string.Join(", ", info.Tls.PermittedCipherSuites)</dd>
+                <dt>Enforcement</dt><dd data-role="tls-enforcement" class="@(info.Tls.CipherSuitesEnforced ? "status-ok" : "status-client")">@(info.Tls.CipherSuitesEnforced ? "✔ enforced by the TLS stack" : "⚠ not enforceable on this OS")</dd>
+            </dl>
+            <p class="detail-note">@info.Tls.Summary</p>
+        </section>
+
+        <section class="dashboard-card" aria-labelledby="insp-title" data-role="inspector-status">
+            <h2 id="insp-title" class="card-title">Inspector</h2>
+            <dl class="stat-list">
+                <dt>Ring buffer</dt><dd data-role="ring">@info.Inspector.RingCount of @info.Inspector.RingCapacity</dd>
+                <dt>Dropped captures</dt><dd data-role="dropped">@info.Inspector.DroppedCaptures capture(s) dropped (@info.Inspector.DroppedExchanges exchange(s), @info.Inspector.DroppedConnectionEvents connection event(s))</dd>
+                <dt>Secret display</dt><dd>@info.Inspector.SecretDisplay</dd>
+                <dt>JSONL persistence</dt><dd>@(info.Inspector.PersistEnabled ? "on" : "off")</dd>
+            </dl>
+        </section>
+
+        <section class="dashboard-card" aria-labelledby="rt-title" data-role="runtime">
+            <h2 id="rt-title" class="card-title">Runtime</h2>
+            <dl class="stat-list">
+                <dt>.NET</dt><dd data-role="runtime-dotnet">@info.Runtime.Dotnet</dd>
+                <dt>OS</dt><dd data-role="runtime-os">@info.Runtime.Os (@info.Runtime.Architecture)</dd>
+                <dt>Container</dt><dd>@(info.Runtime.InContainer ? "yes" : "no")</dd>
+            </dl>
+        </section>
+    </div>
+
+    <section class="dashboard-card" aria-labelledby="cfg-title" data-role="configuration">
+        <h2 id="cfg-title" class="card-title">Effective configuration</h2>
+        <p class="detail-note">Secrets are redacted: only whether they are set is shown.</p>
+        <table class="header-table" data-role="config-table" aria-label="Effective configuration">
+            <thead><tr><th scope="col">Section</th><th scope="col">Setting</th><th scope="col">Value</th></tr></thead>
+            <tbody>
+                @foreach (var entry in info.Configuration)
+                {
+                    <tr data-redacted="@(entry.Redacted ? "true" : "false")"><td>@entry.Section</td><td>@entry.Name</td><td class="wrap-anywhere">@if (entry.Redacted) { <span class="redacted">●●●● </span> } @entry.Value</td></tr>
+                }
+            </tbody>
+        </table>
+    </section>
+
+    <section class="dashboard-card" aria-labelledby="docs-title" data-role="docs">
+        <h2 id="docs-title" class="card-title">Documentation</h2>
+        <ul class="doc-links">
+            @foreach (var link in info.Links)
+            {
+                <li><a href="@link.Url" target="_blank" rel="noopener noreferrer">@link.Title</a></li>
+            }
+        </ul>
+    </section>
+}
+
+@code {
+    private AboutInfo? _info;
+
+    protected override void OnInitialized() => _info = About.Get();
+}

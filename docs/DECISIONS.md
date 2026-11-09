@@ -792,3 +792,90 @@ the handshake and gets `401 Unauthenticated` for every operation (no operation i
 - Keys, Namespaces & trust, Certificates, Playground, Fault injection, Audit log, About pages (M6/M7), replay sending (M6), `/metrics` (M7), CLI (M8), packaging (M9).
 - A visual pass with the editor's integrated browser tool was not done; the visual check used Playwright Chromium against the real server process (see the report).
 
+## M6: Keys, namespaces and trust, certificates, playground, audit log, about
+
+### Banners and contrast (fix found in the M5 visual review)
+- In the light theme the DEV MODE banner text was washed out. `FluentMessageBar` colours its text with the status colour, which fails WCAG AA on the pale tint. Replaced with our own `ConsoleAlert` component: tinted background, the normal
+  foreground token for the text, the status colour only on the border and icon (`DevModeBanner`, `FaultsBanner` and all page alerts use it). I then measured every status class (chips, badges, alerts, budget colours) in both themes in the
+  real browser and darkened `--ekm-warning` and `--ekm-error` (mix with the foreground) until all are at least 4.5:1. No hard-coded colours: Fluent design tokens only.
+
+### Shared service layer, one code path for UI and API
+- `Console/Admin/*`: `KeyAdminService`, `NamespaceAdminService`, `CertificateAdminService`, `PlaygroundService`, `AboutService` (behind `IAboutService`), `AuditRecorder`. The Blazor pages and `/api/console/*` call the same services (no HTTP self-calls), so
+  validation, error text and the audit entry are identical. Failures are `ConsoleActionException(ErrorCode, message)` with messages written for people (never engine internals); the API maps codes to 400/404/409/422.
+- **Audit action taxonomy** (`AuditActions.All`; one entry per state-changing action: user, UTC time, action, target, and a small `details` bag without secrets): `key.create`, `key.import`, `key.enable`, `key.disable`, `key.expiry.set`,
+  `key.expiry.clear`, `key.destroy`, `namespace.create`, `namespace.update`, `namespace.delete`, `namespace.trust.import`, `namespace.trust.test-client`, `certificate.upload`, `certificate.generate`, `playground.wrap`, `playground.unwrap`,
+  `playground.reveal`, `playground.reveal.denied`, `inspector.reveal`, `inspector.reveal.denied`, `inspector.replay`. An enumerating test walks every action through the API/services and asserts exactly one entry with the right user/action/target, and a
+  second one asserts that no entry contains the secrets used in the scenario. Reveals are audited *before* the value is returned (a failed audit write refuses the reveal). The audit page and API are read-only; there is no edit or delete.
+
+### Keys
+- Create validates the name `^[A-Za-z0-9-]{1,64}$` and the type (AES-256, RSA 2048/3072/4096); engine errors are translated, not shown raw. Enable/disable, set/clear expiry (UTC, `yyyy-MM-dd HH:mm`).
+- **Destroy is irreversible (crypto-shred) and needs the key name typed as confirmation, enforced server-side** (`ConfirmationMismatch`, 400, in the service, so the API cannot skip it). The tombstone stays listed as "Destroyed". A destroyed name is reserved:
+  creating a key with that name is refused unless the request says `allow_reuse_of_destroyed_name` (UI: an explicit checkbox), so a name is not reused by accident.
+- Key import exists only when `EKMMOCK_ALLOW_KEY_IMPORT=true` and only in the UI (there is no REST import endpoint). The material is typed into a field that is cleared the moment the dialog submits; it is never echoed, stored in component state after
+  submit, logged or audited (the audit entry says type and size only). Imported keys carry an "Imported" badge. Corrupt keys are shown red with the engine's explanation and are not usable (spec 6.2).
+- Key detail shows the RSA **public** key as PEM and JWK `n`/`e` (copy buttons) and the registration command `az keyvault key create --hsm-name <hsm> --name <ref-name> --external-key-id <key-name>`; the `<hsm>` placeholder is a text box kept in component
+  memory only. Usage counters are shown. Secret AES bytes and RSA private parameters never reach the console (a leak scan covers raw, base64, base64url and hex of both).
+
+### Namespaces and trust
+- Prefix rules per spec 4.2 (at most 64 characters of `[A-Za-z0-9/-]`, normalised; empty means `_default`). The same prefix twice is refused; overlapping prefixes are allowed (routing is longest-prefix) with a warning; a warning is also shown when a prefix
+  equals a `_default` key name (open question 15). Changes persist atomically to `namespaces.json` and the client-trust union is refreshed at runtime through `ClientTrustProvider` (a test proves a client of a new namespace connects without restart).
+- **Delete:** the namespace name must always be typed. A namespace that still has non-destroyed keys is refused (409) unless the request also says `destroy_keys`; then every key is destroyed irreversibly (each with its own `key.destroy` audit entry) before one
+  `namespace.delete` entry (`destroyed_keys=N`). Tombstones stay, so names remain reserved. This is the safest option: nothing is destroyed implicitly.
+- **Trust import** ("Import Managed HSM client trust"): the input is auto-detected as the JSON of `az keyvault ekm-connection certificate show` (`caCertificates` base64 DER, `subjectCommonName`) or PEM. It is parsed and previewed (CN, and per CA subject, issuer, validity,
+  thumbprint) **before anything is saved** (`dry_run` in the API). Warnings: expired, not yet valid, not a CA (a leaf was pasted), issuing CA is not self-signed (trust is by root CA, open questions 18/19), missing CN, and removing the console test CA. Mode `merge` (default)
+  or `replace`; the CN allow-list and the CA list can also be edited by hand. The page shows the matching `az keyvault ekm-connection create --host <host> --server-ca-certificate root-ca.pem --path-prefix <prefix>` command. File upload of the JSON is not implemented (textarea only).
+
+### Certificates
+- Info comes from `ServerCertificateProvider.Info` (SAN, issuer, subject, chain, expiry, source, last reload error); a warning shows under 30 days. The effective TLS policy (protocol, cipher suites enforced or "not enforceable on this OS") is shown here and on About.
+- **Upload** takes a PEM chain plus an unencrypted private key. Validation first (at least one certificate, SAN present, key parses; the provider then checks that the key matches, the server-auth EKU and expiry); a failure keeps the old certificate and shows the error.
+  Storage: the files are written atomically to the configured `Tls:CertFile`/`Tls:KeyFile` when those are set, otherwise to `<data>/tls/server-cert.pem` and `server-key.pem` (key with 0600 permissions on Unix). At the next start the managed files are loaded when no
+  `Tls` files are configured, before the development certificate. The key is never returned, logged, or audited (the audit entry holds subject and thumbprint).
+- **Generate test PKI for an FQDN:** an RSA-2048 root CA plus a 397-day server certificate (SAN = the FQDN), installed with a hot reload and persisted like an upload. **The CA private key is discarded right after signing** (never stored, exposed or downloadable); the
+  trade-off is that the server certificate cannot be re-issued from the same root: generate again and re-register the new `root-ca.pem`. The public `root-ca.pem` is kept in `<data>/tls/` and offered for download only while it still issued the served certificate (an
+  upload deletes it). While the development certificate is served, the development root CA is offered instead.
+- **Console test client** (used by Playground and Replay): a per-process, in-memory ECDSA CA (`EkmMock Console Test Client CA <random>`) and a client certificate with CN `test.managedhsmclient.local`. Nothing is persisted (no key on disk to protect); after a restart a
+  new CA exists and namespaces must trust it again (one click in the Playground). In `--dev` a bootstrap trusts it in `_default` at start (as user `system`, audited).
+
+### Playground and the pinned self-call
+- Direct mode calls the engine in-process and is not EKM traffic (it never appears in Live traffic). Via-EKM mode sends a real TLS 1.3 mutual-TLS request to `https://127.0.0.1:<ekm port>/<prefix>/...` through the full pipeline, so it shows in Live traffic like any other call.
+  `pool_name` is `ekmmock-playground`, with fresh `request_id`/`correlation_id`; the exchange is found in the inspector by its correlation id and linked.
+- **Server certificate validation is pinned, not bypassed:** the self-call client accepts exactly one server certificate, compared by SHA-256 thumbprint with `ServerCertificateProvider.Current` at call time (so it follows a hot reload), and a handler restricts requests to the
+  EKM loopback origin. A test proves a different certificate on the same port is refused.
+- If no namespace trusts the console test CA, no request is sent: the page says so and offers an audited one-click "trust the test CA in this namespace".
+- Results show length and a 12-hex SHA-256 fingerprint only; "unwrap this result" proves the round trip with an equal-fingerprint check. Revealing the plaintext follows the inspector gate exactly (masked by default; `EKMMOCK_INSPECTOR_ALLOW_REVEAL=true` and an audit entry first;
+  `playground.reveal.denied` otherwise). The user's typed DEK is cleared from component state after submit; nothing secret goes to URL, storage, logs or audit.
+
+### Replay
+- The Replay button in Exchange detail is enabled only when the raw body exists (reveal allowed, `CanReplay`), else it stays disabled with the reason. It sends the stored request again through `EkmSelfClient` (same machinery and pinning as the Playground) with the console test client
+  certificate; the inspector audits `inspector.replay`. The new exchange is looked up by client CN, key and operation after the original (up to 3 s) and linked. If no namespace trusts the console test CA the handshake fails and the result says so; if the namespace does not trust it
+  the 401 note explains how to fix it. The replay uses the test client identity, not the original client's certificate (which the console never has).
+
+### REST API for the CLI (`/api/console/*`) and its CSRF mechanism
+- snake_case, source-generated JSON; keys (list/get/create/enable/disable/expire/destroy), namespaces (list/get/create/update/delete, trust import with `dry_run` and `mode`), certificates (info, upload, generate, `root-ca.pem`), audit (list with filters and paging), about and self-test.
+  Same console authentication as the pages. Playground and replay are UI-only.
+- **State-changing calls** (`ConsoleMutationFilter`) must carry either the antiforgery token (browser) **or** the header `X-EkmMock-Client` with a non-empty value, *and then* the request must have **no `Origin` header and `Sec-Fetch-Site` must not be `cross-site`**. A browser cannot send a
+  custom header cross-site without a CORS preflight (the console has no CORS), and browsers always add `Origin`/`Sec-Fetch-Site` to such requests, so a non-browser client (the future CLI, curl) can mutate and a cross-site page cannot. The browser's antiforgery protection is unchanged.
+  In `LoopbackOnly` there is no authentication, so the header is the only mechanism and anything on the machine can call the API (as it can open the console). With `EntraId` the CLI will need a bearer token (M8, open question 38).
+
+### About and redaction
+- Redaction is by construction: the About page builds an explicit list of effective options; secrets (master key, Entra client secret, uploaded key material) appear only as "set / not set" and no secret value is ever read into the view model. Tests set recognisable fake secrets in
+  the environment and configuration and assert that none appears in the page markup, the API or the audit log.
+- Shown: version, effective configuration, self-test per test with pass/fail and duration (failing algorithms/keys flagged), master-key status (loaded / dev mode with the red banner), data volume path and sizes (keystore, namespaces, audit, inspector JSONL), TLS policy, listeners,
+  inspector status (ring size, dropped), auth mode, runtime (.NET, OS, container hint) and links.
+
+### Other implementation notes
+- `ServerCertificateProvider` gained managed files under `<data>/tls/`, `ReplaceAsync(..., source)`, `DevelopmentRootCaPem` and `ServerCertificateSource.ConsoleGenerated`. `ListenerRegistry.EndpointsOf` exposes the listener addresses. The certificate provider and `EkmSelfClient` are resolved lazily so
+  hosts without TLS (unit-test hosts) still start.
+- The shipped `appsettings.json` seeds `_default`; `Dev:SeedSampleKeys` is still off by default.
+
+### M6: Tests and results
+- New: Server.Tests `AdminApiKeysTests`, `AdminApiNamespacesTests`, `AdminApiCertificatesTests`, `AdminApiAuditTests` (with the action walker), `AdminApiSecurityTests`/`AdminApiAboutTests`, `AdminLeakScanTests`, `PlaygroundTests`, `ReplayTests`, `DevModeConsoleBootstrapTests`;
+  Console.Tests page tests for Keys, Namespaces, Certificates, Playground (direct, via EKM, replay), Audit log, About, `PageAccessibilityTests` (every field labelled, grids/tables named, live regions), and Playwright browser tests (create key, playground via EKM, live traffic, audit, certificates, contrast in both themes).
+- Test infrastructure changes: tests that set process-wide environment variables (fake master key / client secret / reveal switch) run in the non-parallel `ProcessEnvironment` collection, because a host started by another test at the same moment read those variables (this caused flakes in
+  `ConsolePortSeparationTests`); Console.Tests raises the thread-pool minimum (real Kestrel servers share the process with bUnit tests that block threads, and a request could stall for tens of seconds on a busy machine) and runs 4 test threads; the browser test of the `root-ca.pem` link fetches
+  the href instead of waiting for a browser download event (the browser cancelled downloads when the machine was busy). The M5 tests that asserted the placeholder pages and the "Replay is implemented in M6" stub were updated to the real behaviour.
+- Results on Windows: 1529 tests (Crypto 308, Server 966, Console 255), 1524 passed, 0 failed, 5 skipped (the 429 placeholder and the four Linux-only cipher tests). The whole solution was run five times in a row with the default parallel modules: 5 of 5 green (3 to 4.5 minutes each; the machine was shared
+  with other work). Before the three test-infrastructure fixes above, runs of the same code failed 1 to 6 tests in about two of three runs, so those fixes matter; one pre-existing mutual-TLS flake in `ConsolePortSeparationTests` was still seen once afterwards (open question 47).
+  Linux (container script): Server 966 tests, 0 failed, 1 skipped (the 429 placeholder).
+- Visual check: the real app (`--dev`, Playwright Chromium) in light and dark: banner contrast fixed, every new page and the create-key, playground (via EKM), live traffic, audit log, trust import and certificate generation flows exercised; defects fixed (truncated Keys columns, double parentheses in the namespace header, audit column width, text-area width). Screenshots were taken to the temp folder, not committed.
+

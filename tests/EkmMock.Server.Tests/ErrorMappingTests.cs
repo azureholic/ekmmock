@@ -136,7 +136,9 @@ public sealed class ErrorMappingTests
             .Select(Path.GetFileName)
             .ToList();
 
-        usingKinds.ShouldBe(["ProxyErrors.cs"]);
+        // ProxyErrors.cs is the one mapping of engine failures to the EKM wire contract (status + code). AdminCommon.cs maps the same kinds to the *console* error codes of the
+        // management actions (a different contract: /api/console and the pages, never the EKM wire); it is the second and last place.
+        usingKinds.ShouldBe(["ProxyErrors.cs", "AdminCommon.cs"], ignoreOrder: true);
     }
 }
 

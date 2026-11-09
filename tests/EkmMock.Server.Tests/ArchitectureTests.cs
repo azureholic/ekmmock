@@ -178,7 +178,7 @@ public sealed class ArchitectureTests
         exported.Where(static t => t.Namespace?.StartsWith("EkmMock.Server.WebConsole", StringComparison.Ordinal) == true)
             .Where(static t => !typeof(Microsoft.AspNetCore.Components.IComponent).IsAssignableFrom(t)
                 && !t.Namespace!.EndsWith(".Charts", StringComparison.Ordinal)
-                && t.Name is not (nameof(EkmMock.Server.WebConsole.Components.TabDefinition) or "_Imports"))
+                && t.Name is not (nameof(EkmMock.Server.WebConsole.Components.TabDefinition) or "_Imports" or "AlertIntent" or "TypedConfirmData" or "TypedConfirmResult"))
             .Select(static t => t.FullName)
             .ShouldBeEmpty("only components and their plain-data models are public");
     }

@@ -1,0 +1,49 @@
+@implements IDialogContentComponent<TypedConfirmData>
+
+@* The typed-name confirmation of every irreversible action (spec 5.4: "Destroying a key requires typing the key name"). The OK button stays disabled until the typed text equals the
+   expected text exactly; the same check runs again on the server (KeyAdminService/NamespaceAdminService), so the REST API cannot skip it. *@
+<div class="confirm-dialog" data-role="confirm-dialog">
+    <p class="confirm-message" data-role="confirm-message">@Content.Message</p>
+    @if (Content.Consequences.Count > 0)
+    {
+        <ul class="confirm-consequences" data-role="confirm-consequences">
+            @foreach (var item in Content.Consequences)
+            {
+                <li>@item</li>
+            }
+        </ul>
+    }
+    @if (Content.OptionLabel is not null)
+    {
+        <FluentCheckbox @bind-Value="_option" Label="@Content.OptionLabel" data-role="confirm-option" />
+    }
+    <label class="confirm-label" for="confirm-typed">Type <code>@Content.ExpectedText</code> to confirm</label>
+    <FluentTextField Id="confirm-typed" @bind-Value="_typed" Immediate="true" ImmediateDelay="0" AutoComplete="off" Placeholder="@Content.ExpectedText" data-role="confirm-input" aria-label="@($"Type {Content.ExpectedText} to confirm")" />
+    <div class="confirm-actions">
+        <FluentButton Appearance="Appearance.Accent" Class="confirm-danger" Disabled="@(!Matches)" OnClick="ConfirmAsync" data-role="confirm-ok">@Content.ConfirmText</FluentButton>
+        <FluentButton Appearance="Appearance.Neutral" OnClick="CancelAsync" data-role="confirm-cancel">Cancel</FluentButton>
+    </div>
+</div>
+
+@code {
+    private string? _typed = string.Empty;
+    private bool _option;
+
+    [Parameter] public TypedConfirmData Content { get; set; } = default!;
+
+    [CascadingParameter] public FluentDialog Dialog { get; set; } = default!;
+
+    private bool Matches => string.Equals(_typed, Content.ExpectedText, StringComparison.Ordinal);
+
+    private async Task ConfirmAsync()
+    {
+        if (!Matches)
+        {
+            return;
+        }
+
+        await Dialog.CloseAsync(new TypedConfirmResult(_typed ?? string.Empty, _option));
+    }
+
+    private Task CancelAsync() => Dialog.CancelAsync();
+}

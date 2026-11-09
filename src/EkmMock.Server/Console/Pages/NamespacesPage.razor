@@ -1,0 +1,447 @@
+@page "/namespaces"
+@using EkmMock.Crypto
+@inject NamespaceAdminService Namespaces
+@inject IConsoleUser CurrentUser
+@inject IDialogService Dialogs
+@inject IToastService Toasts
+
+<PageTitle>Namespaces &amp; trust - EkmMock console</PageTitle>
+
+<h1 tabindex="-1">Namespaces &amp; trust</h1>
+<p class="page-intro">A namespace is one path prefix with its own keys and its own client trust: the exact subject common names that may call it and the root CAs their certificates must chain to. Changes apply to the next request, without a restart.</p>
+
+<div class="toolbar" role="group" aria-label="Namespace actions">
+    <FluentButton Appearance="Appearance.Accent" IconStart="@(new Icons.Regular.Size16.Add())" OnClick="ToggleCreate" data-role="create-toggle">Create namespace</FluentButton>
+    <FluentButton Appearance="Appearance.Lightweight" IconStart="@(new Icons.Regular.Size16.ArrowClockwise())" OnClick="Reload" data-role="refresh">Refresh</FluentButton>
+</div>
+
+<div role="status" aria-live="polite" data-role="messages">
+    @if (_message is { } message)
+    {
+        <ConsoleAlert Intent="message.Intent" DataRole="action-result" OnDismiss="DismissMessage">@message.Text</ConsoleAlert>
+    }
+</div>
+
+@if (_showCreate)
+{
+    <section class="dashboard-card form-card" aria-labelledby="create-title" data-role="create-form">
+        <h2 id="create-title" class="card-title">Create namespace</h2>
+        <div class="form-grid">
+            <div class="filter-field">
+                <FluentTextField @bind-Value="_createName" Immediate="true" ImmediateDelay="0" Label="Name" Placeholder="contoso-prod" Maxlength="64" AutoComplete="off" data-role="create-name" aria-describedby="create-name-help" />
+                <span id="create-name-help" class="field-help @(CreateNameProblem is null ? null : "field-invalid")" data-role="create-name-message">@(CreateNameProblem ?? "Letters, digits, '-' and '_'. Use _default for the namespace without a prefix.")</span>
+            </div>
+            <div class="filter-field">
+                <FluentTextField @bind-Value="_createPrefix" Immediate="true" ImmediateDelay="0" Label="Path prefix" Placeholder="contoso/prod" Maxlength="64" AutoComplete="off" data-role="create-prefix" aria-describedby="create-prefix-help" />
+                <span id="create-prefix-help" class="field-help @(CreatePrefixProblem is null ? null : "field-invalid")" data-role="create-prefix-message">@(CreatePrefixProblem ?? "Up to 64 characters of letters, digits, '-' and '/'. Leave empty only for _default. Normalised to " + (NormalizedCreatePrefix.Length == 0 ? "(none)" : "/" + NormalizedCreatePrefix) + ".")</span>
+            </div>
+        </div>
+        <FluentButton Appearance="Appearance.Accent" Disabled="@(CreateNameProblem is not null || CreatePrefixProblem is not null)" OnClick="CreateAsync" data-role="create-submit">Create</FluentButton>
+    </section>
+}
+
+@if (_namespaces.Count == 0)
+{
+    <p class="chart-empty" data-role="empty">No namespaces yet: every EKM request is a 404 until you create one.</p>
+}
+else
+{
+    <section class="dashboard-card" aria-labelledby="list-title" data-role="namespace-list">
+        <h2 id="list-title" class="card-title">Namespaces</h2>
+        <div class="grid-scroll grid-medium"><FluentDataGrid Items="@_namespaces.AsQueryable()" TGridItem="NamespaceView" ResizableColumns="false" GridTemplateColumns="1.3fr 1.3fr 0.6fr 0.8fr 0.8fr 0.8fr 2fr" aria-label="Namespaces">
+            <TemplateColumn Title="Name">
+                <button type="button" class="link-button" data-role="ns-name" data-ns="@context.Name" @onclick="() => Select(context.Name)">@context.Name</button>
+            </TemplateColumn>
+            <TemplateColumn Title="Prefix"><code data-role="ns-prefix">@context.DisplayPrefix</code></TemplateColumn>
+            <TemplateColumn Title="Keys"><span data-role="ns-keys">@context.KeyCount</span></TemplateColumn>
+            <TemplateColumn Title="Allowed CNs"><span data-role="ns-cns">@context.SubjectCommonNames.Count</span></TemplateColumn>
+            <TemplateColumn Title="Trusted CAs"><span data-role="ns-cas">@context.CaCertificates.Count</span></TemplateColumn>
+            <TemplateColumn Title="Warnings">
+                @if (context.Warnings.Count > 0)
+                {
+                    <span class="status-client" data-role="ns-warnings">⚠ @context.Warnings.Count</span>
+                }
+                else
+                {
+                    <span data-role="ns-warnings">none</span>
+                }
+            </TemplateColumn>
+            <TemplateColumn Title="Actions">
+                <FluentButton Appearance="Appearance.Lightweight" OnClick="() => Select(context.Name)" aria-label="@($"Manage {context.Name}")" data-role="manage">Manage</FluentButton>
+                <FluentButton Appearance="Appearance.Lightweight" Class="danger-text" OnClick="() => DeleteAsync(context)" aria-label="@($"Delete {context.Name}")" data-role="delete">Delete</FluentButton>
+            </TemplateColumn>
+        </FluentDataGrid></div>
+    </section>
+}
+
+@if (Selected is { } ns)
+{
+    <section class="dashboard-card" aria-labelledby="sel-title" data-role="namespace-detail" data-ns="@ns.Name">
+        <div class="detail-panel-header">
+            <h2 id="sel-title" class="card-title">Namespace <code>@ns.Name</code> <span class="count-note">@ns.DisplayPrefix</span></h2>
+            <FluentButton Appearance="Appearance.Lightweight" OnClick="CloseSelected" aria-label="Close namespace details" data-role="detail-close">Close</FluentButton>
+        </div>
+
+        @foreach (var warning in ns.Warnings)
+        {
+            <ConsoleAlert Intent="AlertIntent.Warning" DataRole="ns-warning">@warning</ConsoleAlert>
+        }
+
+        <h3>Connect Managed HSM</h3>
+        <div class="inline-form">
+            <FluentTextField @bind-Value="_hsm" Immediate="true" ImmediateDelay="0" Label="Managed HSM name" Placeholder="my-hsm" AutoComplete="off" data-role="hsm-input" />
+        </div>
+        <pre class="code-block" data-role="az-command">@AzCommand(ns)</pre>
+        <CopyButton Text="@AzCommand(ns)" Title="Copy the az command" Confirmation="Command copied to the clipboard">Copy command</CopyButton>
+        <p class="detail-note">Pass the <strong>root</strong> CA that issued the EKM server certificate (see the Certificates page). The key reference is created afterwards with <code>az keyvault key create ... --external-key-id &lt;key name&gt;</code>.</p>
+
+        <h3>Path prefix</h3>
+        <div class="inline-form">
+            <FluentTextField @bind-Value="_editPrefix" Immediate="true" ImmediateDelay="0" Label="Path prefix" Maxlength="64" AutoComplete="off" Disabled="@(ns.Name == EkmNames.DefaultNamespace)" data-role="edit-prefix" aria-describedby="edit-prefix-help" />
+            <FluentButton Appearance="Appearance.Neutral" Disabled="@(EditPrefixProblem is not null || ns.Name == EkmNames.DefaultNamespace)" OnClick="SavePrefixAsync" data-role="edit-prefix-save">Save prefix</FluentButton>
+        </div>
+        <span id="edit-prefix-help" class="field-help @(EditPrefixProblem is null ? null : "field-invalid")" data-role="edit-prefix-message">@(EditPrefixProblem ?? (ns.Name == EkmNames.DefaultNamespace ? "_default has no prefix." : "Overlapping prefixes are allowed: the longest matching prefix wins."))</span>
+
+        <h3>Allowed client common names</h3>
+        <p class="detail-note">Exact and case-sensitive. This is what Managed HSM reports as <code>subjectCommonName</code>.</p>
+        @if (ns.SubjectCommonNames.Count == 0)
+        {
+            <p class="chart-empty" data-role="no-cns">No common name is allowed yet.</p>
+        }
+        else
+        {
+            <ul class="chip-list" data-role="cn-list">
+                @foreach (var cn in ns.SubjectCommonNames)
+                {
+                    <li class="chip" data-cn="@cn"><code>@cn</code> <button type="button" class="chip-remove" aria-label="@($"Remove common name {cn}")" data-role="cn-remove" @onclick="() => RemoveCnAsync(cn)">Remove</button></li>
+                }
+            </ul>
+        }
+        <div class="inline-form">
+            <FluentTextField @bind-Value="_newCn" Immediate="true" ImmediateDelay="0" Label="Add a common name" AutoComplete="off" data-role="cn-input" />
+            <FluentButton Appearance="Appearance.Neutral" Disabled="@string.IsNullOrWhiteSpace(_newCn)" OnClick="AddCnAsync" data-role="cn-add">Add</FluentButton>
+        </div>
+
+        <h3>Trusted root CAs</h3>
+        @if (ns.CaCertificates.Count == 0)
+        {
+            <p class="chart-empty" data-role="no-cas">No CA is trusted yet.</p>
+        }
+        else
+        {
+            <div class="grid-scroll grid-medium"><FluentDataGrid Items="@ns.CaCertificates.AsQueryable()" TGridItem="CaCertificateView" ResizableColumns="false" GridTemplateColumns="2fr 2fr 1fr 1.6fr 0.8fr" aria-label="Trusted CAs">
+                <TemplateColumn Title="Subject"><span class="wrap-anywhere" data-role="ca-subject">@context.Subject</span></TemplateColumn>
+                <TemplateColumn Title="Issuer"><span class="wrap-anywhere">@context.Issuer</span></TemplateColumn>
+                <TemplateColumn Title="Not after"><span class="@(context.IsExpired ? "status-server" : null)" data-role="ca-expiry">@context.NotAfter.UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)@(context.IsExpired ? " (expired)" : null)</span></TemplateColumn>
+                <TemplateColumn Title="Kind">
+                    <span data-role="ca-kind">@KindText(context)</span>
+                </TemplateColumn>
+                <TemplateColumn Title="Actions">
+                    <FluentButton Appearance="Appearance.Lightweight" Class="danger-text" OnClick="() => RemoveCaAsync(context)" aria-label="@($"Remove CA {context.Subject}")" data-role="ca-remove">Remove</FluentButton>
+                </TemplateColumn>
+            </FluentDataGrid></div>
+        }
+
+        <h3>Console test client</h3>
+        @if (ns.TrustsConsoleTestClient)
+        {
+            <p data-role="test-client-state"><span class="status-ok">✔ Trusted.</span> The Playground and Replay can call this namespace as <code>@ConsoleTestIdentity.CommonName</code>.</p>
+        }
+        else
+        {
+            <p class="detail-note" data-role="test-client-state">The Playground "via EKM endpoint" mode and Replay present the console test certificate (CN <code>@ConsoleTestIdentity.CommonName</code>). This namespace does not trust its CA yet.</p>
+            <FluentButton Appearance="Appearance.Neutral" OnClick="TrustTestClientAsync" data-role="trust-test-client">Trust the console test CA in this namespace</FluentButton>
+        }
+
+        <h3>Import Managed HSM client trust</h3>
+        <p class="detail-note">Paste the output of <code>az keyvault ekm-connection certificate show --hsm-name &lt;hsm&gt;</code> (JSON with <code>caCertificates</code> and <code>subjectCommonName</code>), or PEM certificates. You review everything before it is saved.</p>
+        <FluentTextArea @bind-Value="_importText" Label="Trust input (JSON or PEM)" Rows="6" Spellcheck="false" Resize="TextAreaResize.Vertical" data-role="import-text" />
+        <div class="form-grid">
+            <div class="filter-field">
+                <FluentSelect TOption="string" Label="Format" Items="@Formats" @bind-SelectedOption="_importFormat" OptionText="@(f => f)" OptionValue="@(f => f)" data-role="import-format" />
+            </div>
+            <div class="filter-field">
+                <FluentSelect TOption="string" Label="Mode" Items="@Modes" @bind-SelectedOption="_importMode" OptionText="@(m => ModeText(m))" OptionValue="@(m => m)" data-role="import-mode" />
+            </div>
+            <div class="filter-field">
+                <FluentTextField @bind-Value="_importCns" Label="Common names (PEM only, comma separated)" AutoComplete="off" data-role="import-cns" />
+            </div>
+        </div>
+        <div class="inline-form">
+            <FluentButton Appearance="Appearance.Neutral" OnClick="PreviewAsync" data-role="import-preview">Preview</FluentButton>
+            <FluentButton Appearance="Appearance.Accent" Disabled="@(_preview is null)" OnClick="SaveImportAsync" data-role="import-save">Save trust</FluentButton>
+        </div>
+
+        @if (_preview is { } preview)
+        {
+            <div class="preview-card" data-role="import-preview-result" aria-live="polite">
+                <h4>Preview (nothing is saved yet)</h4>
+                <dl class="detail-grid">
+                    <dt>Format</dt><dd>@preview.Format.ToUpperInvariant()</dd>
+                    <dt>Common names</dt>
+                    <dd data-role="preview-cns">@(preview.SubjectCommonNames.Count == 0 ? "(none in the input)" : string.Join(", ", preview.SubjectCommonNames))</dd>
+                    <dt>After saving (@ModeText(preview.Mode))</dt>
+                    <dd data-role="preview-result">@preview.ResultingSubjectCommonNames.Count common name(s), @preview.ResultingCaCount CA(s)</dd>
+                </dl>
+                @foreach (var warning in preview.Warnings)
+                {
+                    <ConsoleAlert Intent="AlertIntent.Warning" DataRole="preview-warning">@warning</ConsoleAlert>
+                }
+                <table class="header-table" data-role="preview-cas" aria-label="CA certificates in the import">
+                    <thead><tr><th scope="col">Subject</th><th scope="col">Issuer</th><th scope="col">Not after</th><th scope="col">Kind</th></tr></thead>
+                    <tbody>
+                        @foreach (var ca in preview.CaCertificates)
+                        {
+                            <tr data-role="preview-ca">
+                                <td class="wrap-anywhere">@ca.Subject</td>
+                                <td class="wrap-anywhere">@ca.Issuer</td>
+                                <td class="@(ca.IsExpired ? "status-server" : null)">@ca.NotAfter.UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)@(ca.IsExpired ? " (expired)" : null)</td>
+                                <td>@KindText(ca)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+}
+
+@code {
+    private sealed record Message(AlertIntent Intent, string Text);
+
+    private static readonly string[] Formats = ["auto", "json", "pem"];
+    private static readonly string[] Modes = [TrustImportModes.Merge, TrustImportModes.Replace];
+
+    private List<NamespaceView> _namespaces = [];
+    private Message? _message;
+    private string? _selectedName;
+
+    private bool _showCreate;
+    private string? _createName = string.Empty;
+    private string? _createPrefix = string.Empty;
+
+    private string? _editPrefix = string.Empty;
+    private string? _newCn = string.Empty;
+    private string? _hsm = string.Empty;
+
+    private string? _importText = string.Empty;
+    private string _importFormat = Formats[0];
+    private string _importMode = Modes[0];
+    private string? _importCns = string.Empty;
+    private TrustPreview? _preview;
+
+    private NamespaceView? Selected => _selectedName is null ? null : _namespaces.FirstOrDefault(n => n.Name == _selectedName);
+
+    private string NormalizedCreatePrefix => EkmNames.TryNormalizePrefix(_createPrefix, out var normalized, out _) ? normalized : string.Empty;
+
+    private string? CreateNameProblem
+        => string.IsNullOrEmpty(_createName) ? "Enter a name."
+            : !EkmNames.IsValidNamespaceName(_createName) ? "Use 1 to 64 letters, digits, '-' or '_'."
+            : _namespaces.Any(n => n.Name == _createName) ? "A namespace with this name already exists."
+            : null;
+
+    private string? CreatePrefixProblem
+    {
+        get
+        {
+            if (!EkmNames.TryNormalizePrefix(_createPrefix, out var normalized, out var error))
+            {
+                return error;
+            }
+
+            if ((_createName == EkmNames.DefaultNamespace) != (normalized.Length == 0))
+            {
+                return _createName == EkmNames.DefaultNamespace ? "_default must have an empty prefix." : "Only _default may have an empty prefix.";
+            }
+
+            return _namespaces.Any(n => n.Prefix == normalized) ? "Another namespace already uses this prefix." : null;
+        }
+    }
+
+    private string? EditPrefixProblem
+        => !EkmNames.TryNormalizePrefix(_editPrefix, out var normalized, out var error) ? error
+            : Selected is { } s && s.Name != EkmNames.DefaultNamespace && normalized.Length == 0 ? "Only _default may have an empty prefix."
+            : _namespaces.Any(n => n.Name != _selectedName && n.Prefix == normalized) ? "Another namespace already uses this prefix."
+            : null;
+
+    protected override void OnInitialized() => Load();
+
+    private void Load()
+    {
+        try
+        {
+            _namespaces = [.. Namespaces.List()];
+        }
+        catch (ConsoleActionException exception)
+        {
+            _message = new Message(AlertIntent.Error, exception.Message);
+        }
+
+        if (_selectedName is not null && Selected is null)
+        {
+            _selectedName = null;
+        }
+    }
+
+    private void Reload() => Load();
+
+    private void ToggleCreate() => _showCreate = !_showCreate;
+
+    private void DismissMessage() => _message = null;
+
+    private void Select(string name)
+    {
+        _selectedName = name;
+        _editPrefix = Selected?.Prefix ?? string.Empty;
+        _preview = null;
+        _importText = string.Empty;
+    }
+
+    private void CloseSelected() => _selectedName = null;
+
+    private string AzCommand(NamespaceView ns)
+        => ns.AzCommand.Replace("<hsm>", string.IsNullOrWhiteSpace(_hsm) ? "<hsm>" : _hsm.Trim(), StringComparison.Ordinal);
+
+    private static string KindText(CaCertificateView ca)
+        => ca.IsConsoleTestCa ? "console test CA"
+            : !ca.IsCa ? "⚠ not a CA (leaf?)"
+            : !ca.IsSelfSigned ? "⚠ issuing CA, not a root"
+            : "root CA";
+
+    private static string ModeText(string mode) => mode == TrustImportModes.Replace ? "Replace existing trust" : "Merge with existing trust";
+
+    private async Task<string> ActorAsync() => (await CurrentUser.GetAsync()).AuditName;
+
+    private async Task<bool> RunAsync(Action<string> action, string success)
+    {
+        _message = null;
+        var ok = false;
+        try
+        {
+            action(await ActorAsync());
+            _message = new Message(AlertIntent.Success, success);
+            Toasts.ShowSuccess(success);
+            ok = true;
+        }
+        catch (ConsoleActionException exception)
+        {
+            _message = new Message(AlertIntent.Error, exception.Message);
+            Toasts.ShowError(exception.Message);
+        }
+
+        Load();
+        return ok;
+    }
+
+    private async Task CreateAsync()
+    {
+        var name = _createName ?? string.Empty;
+        var prefix = _createPrefix ?? string.Empty;
+        if (await RunAsync(actor => Namespaces.Create(actor, new NamespaceChange(name, prefix, null, null)), $"Namespace {name} created."))
+        {
+            _createName = string.Empty;
+            _createPrefix = string.Empty;
+            _showCreate = false;
+            Select(name);
+        }
+    }
+
+    private Task SavePrefixAsync()
+    {
+        var ns = Selected!;
+        var prefix = _editPrefix ?? string.Empty;
+        return RunAsync(actor => Namespaces.Update(actor, new NamespaceChange(ns.Name, prefix, null, null)), $"Prefix of {ns.Name} saved.");
+    }
+
+    private Task AddCnAsync()
+    {
+        var ns = Selected!;
+        var cn = (_newCn ?? string.Empty).Trim();
+        _newCn = string.Empty;
+        return RunAsync(actor => Namespaces.Update(actor, new NamespaceChange(ns.Name, ns.Prefix, [.. ns.SubjectCommonNames, cn], null)), $"Common name {cn} added to {ns.Name}.");
+    }
+
+    private Task RemoveCnAsync(string cn)
+    {
+        var ns = Selected!;
+        return RunAsync(actor => Namespaces.Update(actor, new NamespaceChange(ns.Name, ns.Prefix, [.. ns.SubjectCommonNames.Where(c => c != cn)], null)), $"Common name {cn} removed from {ns.Name}.");
+    }
+
+    private Task RemoveCaAsync(CaCertificateView ca)
+    {
+        var ns = Selected!;
+        return RunAsync(
+            actor => Namespaces.Update(actor, new NamespaceChange(ns.Name, ns.Prefix, null, [.. ns.CaCertificates.Where(c => c.ThumbprintSha256 != ca.ThumbprintSha256).Select(static c => c.DerBase64)])),
+            $"CA removed from {ns.Name}.");
+    }
+
+    private Task TrustTestClientAsync()
+    {
+        var ns = Selected!;
+        return RunAsync(actor => Namespaces.TrustConsoleTestClient(actor, ns.Name), $"The console test CA is now trusted in {ns.Name}.");
+    }
+
+    private Task PreviewAsync()
+    {
+        _message = null;
+        try
+        {
+            _preview = Namespaces.Preview(_selectedName!, _importText ?? string.Empty, _importFormat, SplitCns(), _importMode);
+        }
+        catch (ConsoleActionException exception)
+        {
+            _preview = null;
+            _message = new Message(AlertIntent.Error, exception.Message);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private async Task SaveImportAsync()
+    {
+        var ns = _selectedName!;
+        var text = _importText ?? string.Empty;
+        if (await RunAsync(actor => Namespaces.Import(actor, ns, text, _importFormat, SplitCns(), _importMode), $"Trust saved for {ns}. The next request uses it."))
+        {
+            _preview = null;
+            _importText = string.Empty;
+        }
+    }
+
+    private string[] SplitCns() => (_importCns ?? string.Empty).Split([',', ';', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    private async Task DeleteAsync(NamespaceView ns)
+    {
+        var consequences = new List<string>
+        {
+            "Requests under this prefix answer 404 from now on, and the namespace's client trust is gone.",
+        };
+        if (ns.KeyCount > 0)
+        {
+            consequences.Add($"It still has {ns.KeyCount} key(s) that are not destroyed. The namespace can only be deleted if all of them are destroyed too (irreversible).");
+        }
+
+        var dialog = await Dialogs.ShowDialogAsync<TypedConfirmDialog, TypedConfirmData>(
+            new TypedConfirmData(
+                $"Delete namespace {ns.Name}?",
+                ns.Name,
+                "Delete namespace",
+                consequences,
+                ns.KeyCount > 0 ? $"Also destroy all {ns.KeyCount} key(s) in this namespace (irreversible crypto-shred)" : null),
+            new DialogParameters { Title = "Delete namespace", ShowDismiss = true, PrimaryAction = null, SecondaryAction = null, PreventDismissOnOverlayClick = true, Width = "540px" });
+        var result = await dialog.Result;
+        if (result.Cancelled || result.Data is not TypedConfirmResult)
+        {
+            return;
+        }
+
+        var confirmed = (TypedConfirmResult)result.Data;
+        if (await RunAsync(actor => Namespaces.Delete(actor, ns.Name, confirmed.Typed, confirmed.Option), $"Namespace {ns.Name} deleted."))
+        {
+            if (_selectedName == ns.Name)
+            {
+                _selectedName = null;
+            }
+        }
+    }
+}

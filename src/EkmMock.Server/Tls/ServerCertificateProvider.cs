@@ -20,7 +20,10 @@ internal interface IServerCertificateProvider
     /// when those are configured. Existing connections are not touched. Throws <see cref="ServerCertificateException"/> and keeps
     /// the current certificate when the input is not usable. This is the seam for the console upload (M6).
     /// </summary>
-    Task<ServerCertificateInfo> ReplaceAsync(string certificatePem, string privateKeyPem, CancellationToken cancellationToken = default);
+    Task<ServerCertificateInfo> ReplaceAsync(string certificatePem, string privateKeyPem, CancellationToken cancellationToken = default, ServerCertificateSource source = ServerCertificateSource.Uploaded);
+
+    /// <summary>Dev mode only: the PEM (public) of the generated root CA behind the generated localhost certificate, null otherwise.</summary>
+    string? DevelopmentRootCaPem { get; }
 
     event Action<ServerCertificateSnapshot>? Changed;
 }
@@ -42,16 +45,27 @@ internal sealed class ServerCertificateProvider : IServerCertificateProvider, ID
     private readonly Timer? _pollTimer;
     private readonly Timer? _debounceTimer;
 
+    // Where the console persists an uploaded or generated certificate when no Tls:CertFile/KeyFile is configured: <Data:Path>/tls/ (see DECISIONS "M6: Certificates").
+    private readonly string? _managedCertFile;
+    private readonly string? _managedKeyFile;
+
     private ServerCertificateSnapshot _current;
     private (string Message, DateTimeOffset AtUtc)? _lastError;
     private string _lastSeenFingerprint;
     private bool _disposed;
 
-    public ServerCertificateProvider(IOptions<TlsOptions> options, IOptions<DevOptions> dev, TimeProvider time, ILogger<ServerCertificateProvider> logger)
+    public ServerCertificateProvider(IOptions<TlsOptions> options, IOptions<DevOptions> dev, TimeProvider time, ILogger<ServerCertificateProvider> logger, IOptions<DataOptions>? data = null)
     {
         _options = options.Value;
         _time = time;
         _logger = logger;
+
+        if (data is not null && !string.IsNullOrWhiteSpace(data.Value.Path))
+        {
+            var folder = Path.Combine(Path.GetFullPath(data.Value.Path), ManagedFolderName);
+            _managedCertFile = Path.Combine(folder, ManagedCertFileName);
+            _managedKeyFile = Path.Combine(folder, ManagedKeyFileName);
+        }
 
         if (_options.Validate() is { } problem)
         {
@@ -81,6 +95,13 @@ internal sealed class ServerCertificateProvider : IServerCertificateProvider, ID
 
             _lastSeenFingerprint = _current.ContentFingerprint;
             LogLoaded(_current, "loaded");
+        }
+        else if (TryLoadManaged() is { } managed)
+        {
+            // Configured files always win; next come the files the console wrote itself (upload or generated test PKI), then the dev certificate.
+            _current = managed;
+            _lastSeenFingerprint = _current.ContentFingerprint;
+            LogLoaded(_current, "loaded from the data volume (console upload or generated test PKI)");
         }
         else if (dev.Value.Enabled)
         {
@@ -124,7 +145,34 @@ internal sealed class ServerCertificateProvider : IServerCertificateProvider, ID
     /// <summary>For dev mode only: the PEM of the generated root CA that signed the generated server certificate (to trust it in a client).</summary>
     public string? DevelopmentRootCaPem { get; private set; }
 
-    public Task<ServerCertificateInfo> ReplaceAsync(string certificatePem, string privateKeyPem, CancellationToken cancellationToken = default)
+    /// <summary>The folder (below <c>Data:Path</c>) where the console keeps an uploaded or generated certificate when <c>Tls:CertFile</c> is not configured.</summary>
+    internal const string ManagedFolderName = "tls";
+
+    internal const string ManagedCertFileName = "server-cert.pem";
+
+    internal const string ManagedKeyFileName = "server-key.pem";
+
+    // A bad or half-written managed file is not fatal (it is not operator configuration): the host falls through to dev mode or the "no certificate" start-up error.
+    private ServerCertificateSnapshot? TryLoadManaged()
+    {
+        if (_managedCertFile is null || _managedKeyFile is null || !File.Exists(_managedCertFile) || !File.Exists(_managedKeyFile))
+        {
+            return null;
+        }
+
+        try
+        {
+            var snapshot = ServerCertificateLoader.Load(ReadShared(_managedCertFile), ReadShared(_managedKeyFile), ServerCertificateSource.Uploaded, _time.GetUtcNow());
+            return snapshot;
+        }
+        catch (Exception ex) when (ex is ServerCertificateException or IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning("The certificate saved on the data volume by the console cannot be used ({ExceptionType}); ignoring it.", ex.GetType().Name);
+            return null;
+        }
+    }
+
+    public Task<ServerCertificateInfo> ReplaceAsync(string certificatePem, string privateKeyPem, CancellationToken cancellationToken = default, ServerCertificateSource source = ServerCertificateSource.Uploaded)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (_gate)
@@ -134,7 +182,7 @@ internal sealed class ServerCertificateProvider : IServerCertificateProvider, ID
             ServerCertificateSnapshot candidate;
             try
             {
-                candidate = ServerCertificateLoader.Load(certificatePem, privateKeyPem, ServerCertificateSource.Uploaded, now);
+                candidate = ServerCertificateLoader.Load(certificatePem, privateKeyPem, source, now);
                 if (candidate.NotAfterUtc <= now)
                 {
                     candidate.Dispose();
@@ -152,6 +200,14 @@ internal sealed class ServerCertificateProvider : IServerCertificateProvider, ID
                 // Key first, then certificate: a watcher that fires in between sees a mismatch and keeps the old certificate.
                 WriteAtomically(_options.KeyFile!, privateKeyPem, secret: true);
                 WriteAtomically(_options.CertFile!, certificatePem, secret: false);
+            }
+            else if (_managedCertFile is not null && _managedKeyFile is not null)
+            {
+                // No configured files: persist next to the other state on the data volume so the certificate survives a restart. The key is written with
+                // owner-only permissions where the OS has them, and is never logged, returned or shown.
+                Directory.CreateDirectory(Path.GetDirectoryName(_managedKeyFile)!);
+                WriteAtomically(_managedKeyFile, privateKeyPem, secret: true);
+                WriteAtomically(_managedCertFile, certificatePem, secret: false);
             }
 
             _lastSeenFingerprint = candidate.ContentFingerprint;

@@ -1,0 +1,444 @@
+@page "/keys"
+@using EkmMock.Crypto
+@inject KeyAdminService Keys
+@inject NamespaceAdminService Namespaces
+@inject IConsoleUser CurrentUser
+@inject IDialogService Dialogs
+@inject IToastService Toasts
+@inject TimeProvider Time
+
+<PageTitle>Keys - EkmMock console</PageTitle>
+
+<h1 tabindex="-1">Keys</h1>
+<p class="page-intro">The keys of the software HSM, per namespace. The console never shows secret key bytes or RSA private parameters: only metadata and the RSA public key.</p>
+
+<div class="toolbar" role="group" aria-label="Key actions">
+    <FluentButton Appearance="Appearance.Accent" IconStart="@(new Icons.Regular.Size16.Add())" OnClick="ToggleCreate" data-role="create-toggle">Create key</FluentButton>
+    @if (Keys.ImportEnabled)
+    {
+        <FluentButton Appearance="Appearance.Neutral" IconStart="@(new Icons.Regular.Size16.ArrowUpload())" OnClick="ToggleImport" data-role="import-toggle">Import test key</FluentButton>
+    }
+    <FluentButton Appearance="Appearance.Lightweight" IconStart="@(new Icons.Regular.Size16.ArrowClockwise())" OnClick="Reload" data-role="refresh">Refresh</FluentButton>
+</div>
+
+<div role="status" aria-live="polite" data-role="messages">
+    @if (_message is { } message)
+    {
+        <ConsoleAlert Intent="message.Intent" DataRole="action-result" OnDismiss="DismissMessage">@message.Text</ConsoleAlert>
+    }
+</div>
+
+@if (_showCreate)
+{
+    <section class="dashboard-card form-card" aria-labelledby="create-title" data-role="create-form">
+        <h2 id="create-title" class="card-title">Create key</h2>
+        @if (_namespaceNames.Count == 0)
+        {
+            <p class="chart-empty" data-role="no-namespaces">There is no namespace yet. Create one on the <a href="/namespaces">Namespaces &amp; trust</a> page first.</p>
+        }
+        else
+        {
+            <div class="form-grid">
+                <div class="filter-field">
+                    <FluentSelect TOption="string" Label="Namespace" Items="@_namespaceNames" @bind-SelectedOption="_createNamespace" OptionText="@(n => n)" OptionValue="@(n => n)" data-role="create-namespace" />
+                </div>
+                <div class="filter-field">
+                    <FluentTextField @bind-Value="_createName" Immediate="true" ImmediateDelay="0" Label="Key name" Placeholder="aes-key-1" Maxlength="64" AutoComplete="off" data-role="create-name" aria-describedby="create-name-help" />
+                    <span id="create-name-help" class="field-help @(NameProblem is null ? null : "field-invalid")" data-role="create-name-message">@(NameProblem ?? "1 to 64 letters, digits or '-'. This is the external key identifier.")</span>
+                </div>
+                <div class="filter-field">
+                    <FluentSelect TOption="KeyTypeOption" Label="Type" Items="@KeyTypeOption.All" @bind-SelectedOption="_createType" OptionText="@(t => t.Label)" OptionValue="@(t => t.Label)" data-role="create-type" />
+                </div>
+            </div>
+            @if (_offerReuse)
+            {
+                <FluentCheckbox @bind-Value="_createReuse" Label="Reuse the name of a destroyed key (I understand the old key is gone for good)" data-role="create-reuse" />
+            }
+            <FluentButton Appearance="Appearance.Accent" Disabled="@(NameProblem is not null || string.IsNullOrEmpty(_createNamespace))" OnClick="CreateAsync" data-role="create-submit">Create</FluentButton>
+        }
+    </section>
+}
+
+@if (_showImport && Keys.ImportEnabled)
+{
+    <section class="dashboard-card form-card" aria-labelledby="import-title" data-role="import-form">
+        <h2 id="import-title" class="card-title">Import test key <span class="badge badge-imported">Imported</span></h2>
+        <p class="detail-note">For RFC test vectors only. The key material is sent to the engine once and cleared from this page immediately; it is never stored, logged, echoed or written to the audit log. Imported keys carry the Imported badge.</p>
+        <div class="form-grid">
+            <div class="filter-field">
+                <FluentSelect TOption="string" Label="Namespace" Items="@_namespaceNames" @bind-SelectedOption="_importNamespace" OptionText="@(n => n)" OptionValue="@(n => n)" data-role="import-namespace" />
+            </div>
+            <div class="filter-field">
+                <FluentTextField @bind-Value="_importName" Immediate="true" ImmediateDelay="0" Label="Key name" Maxlength="64" AutoComplete="off" data-role="import-name" />
+            </div>
+            <div class="filter-field">
+                <FluentSelect TOption="string" Label="Type" Items="@ImportTypes" @bind-SelectedOption="_importType" OptionText="@(t => t)" OptionValue="@(t => t)" data-role="import-type" />
+            </div>
+        </div>
+        <FluentTextArea @bind-Value="_importMaterial" Label="@(_importType == ImportTypes[0] ? "AES-256 key (64 hex characters or 43 base64url characters)" : "RSA private key (PKCS#8 PEM)")" Rows="4" AutoComplete="off" Spellcheck="false" data-role="import-material" />
+        <FluentButton Appearance="Appearance.Accent" OnClick="ImportAsync" data-role="import-submit">Import</FluentButton>
+    </section>
+}
+
+@if (_groups.Count == 0)
+{
+    <p class="chart-empty" data-role="empty">No keys yet. Create one with the button above.</p>
+}
+
+@foreach (var group in _groups)
+{
+    <section class="dashboard-card" aria-labelledby="@($"ns-{group.Key}")" data-namespace="@group.Key">
+        <h2 id="@($"ns-{group.Key}")" class="card-title">Namespace <code>@group.Key</code> <span class="count-note">(@group.Count() key@(group.Count() == 1 ? string.Empty : "s"))</span></h2>
+        <div class="grid-scroll grid-wide"><FluentDataGrid Items="@group.AsQueryable()" TGridItem="KeyView" ResizableColumns="false" GridTemplateColumns="9rem 6.5rem 7rem 7.5rem 6.5rem 6.5rem 8rem 8.5rem 15rem" aria-label="@($"Keys in namespace {group.Key}")">
+            <TemplateColumn Title="Name">
+                <button type="button" class="link-button key-name" data-role="key-name" data-key="@context.Name" @onclick="() => SelectAsync(context)">@context.Name</button>
+            </TemplateColumn>
+            <TemplateColumn Title="Type"><span data-role="key-type">@context.Display</span></TemplateColumn>
+            <TemplateColumn Title="State">
+                <span class="key-state state-@context.State.ToLowerInvariant()" data-role="key-state" data-state="@context.State" title="@context.StateNote">
+                    <span class="state-icon" aria-hidden="true">@StateIcon(context)</span> @context.State
+                </span>
+            </TemplateColumn>
+            <TemplateColumn Title="Origin">
+                @if (context.IsImported)
+                {
+                    <span class="badge badge-imported" data-role="origin-badge">Imported</span>
+                }
+                else
+                {
+                    <span data-role="origin">Generated</span>
+                }
+            </TemplateColumn>
+            <TemplateColumn Title="Created"><span title="@ConsoleDisplay.FullTime(context.CreatedAt)">@context.CreatedAt.UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)</span></TemplateColumn>
+            <TemplateColumn Title="Not after"><span data-role="not-after">@(context.NotAfter is { } na ? na.UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) : "no expiry")</span></TemplateColumn>
+            <TemplateColumn Title="Last used"><span data-role="last-used">@(context.LastUsedAt is { } lu ? lu.UtcDateTime.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) : "never")</span></TemplateColumn>
+            <TemplateColumn Title="Wrap/unwrap"><span data-role="wrap-count" title="wrap operations">@context.WrapCount</span> / <span data-role="unwrap-count" title="unwrap operations">@context.UnwrapCount</span></TemplateColumn>
+            <TemplateColumn Title="Actions">
+                @if (!context.IsDestroyed)
+                {
+                    <FluentButton Appearance="Appearance.Lightweight" OnClick="() => SelectAsync(context)" aria-label="@($"Details of {context.Name}")" data-role="details">Details</FluentButton>
+                    <FluentButton Appearance="Appearance.Lightweight" OnClick="() => ToggleEnabledAsync(context)" aria-label="@(context.State == "Disabled" ? $"Enable {context.Name}" : $"Disable {context.Name}")" data-role="toggle-enabled">@(context.State == "Disabled" ? "Enable" : "Disable")</FluentButton>
+                    <FluentButton Appearance="Appearance.Lightweight" Class="danger-text" OnClick="() => DestroyAsync(context)" aria-label="@($"Destroy {context.Name}")" data-role="destroy">Destroy</FluentButton>
+                }
+                else
+                {
+                    <span class="detail-note" data-role="destroyed-note">destroyed @(context.DestroyedAt is { } d ? d.UtcDateTime.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) : string.Empty) by @(context.DestroyedBy ?? "unknown")</span>
+                }
+            </TemplateColumn>
+        </FluentDataGrid></div>
+        @foreach (var problem in group.Where(static k => k.IsProblem))
+        {
+            <ConsoleAlert Intent="AlertIntent.Error" Title="@($"{problem.Name} is {problem.State}")" DataRole="key-problem" data-key="@problem.Name">@problem.StateNote</ConsoleAlert>
+        }
+    </section>
+}
+
+@if (_detail is { } detail)
+{
+    <section class="dashboard-card" aria-labelledby="detail-title" data-role="key-detail" data-key="@detail.Key.Name">
+        <div class="detail-panel-header">
+            <h2 id="detail-title" class="card-title">Key <code>@detail.Key.Namespace/@detail.Key.Name</code></h2>
+            <FluentButton Appearance="Appearance.Lightweight" OnClick="CloseDetail" aria-label="Close key details" data-role="detail-close">Close</FluentButton>
+        </div>
+        <dl class="detail-grid">
+            <dt>Type</dt><dd>@detail.Key.Display</dd>
+            <dt>State</dt><dd><span class="key-state state-@detail.Key.State.ToLowerInvariant()" data-role="detail-state">@detail.Key.State</span> @(detail.Key.StateNote is null ? null : $"- {detail.Key.StateNote}")</dd>
+            <dt>Origin</dt><dd>@if (detail.Key.IsImported) { <span class="badge badge-imported">Imported</span> } else { <span>Generated</span> }</dd>
+            <dt>Created</dt><dd>@ConsoleDisplay.FullTime(detail.Key.CreatedAt)</dd>
+            <dt>Not after</dt><dd>@(detail.Key.NotAfter is { } na ? ConsoleDisplay.FullTime(na) : "no expiry")</dd>
+            <dt>Usage</dt><dd data-role="detail-usage">@detail.Key.WrapCount wrap(s), @detail.Key.UnwrapCount unwrap(s), last used @(detail.Key.LastUsedAt is { } lu ? ConsoleDisplay.FullTime(lu) : "never")</dd>
+            <dt>Routing</dt><dd>@detail.RoutingNote</dd>
+        </dl>
+
+        @if (!detail.Key.IsDestroyed)
+        {
+            <h3>Expiry</h3>
+            <div class="inline-form">
+                <FluentTextField @bind-Value="_expiryText" Label="Not after (UTC, yyyy-MM-dd HH:mm)" Placeholder="2026-12-31 23:59" data-role="expiry-input" />
+                <FluentButton Appearance="Appearance.Neutral" OnClick="SetExpiryAsync" data-role="expiry-set">Set expiry</FluentButton>
+                <FluentButton Appearance="Appearance.Neutral" OnClick="ClearExpiryAsync" Disabled="@(detail.Key.NotAfter is null)" data-role="expiry-clear">Clear expiry</FluentButton>
+            </div>
+            <p class="detail-note">A date in the past is allowed on purpose: it makes the key answer <code>403 KeyExpired</code>.</p>
+
+            <h3>Register with Managed HSM</h3>
+            <div class="inline-form">
+                <FluentTextField @bind-Value="_hsm" Immediate="true" ImmediateDelay="0" Label="Managed HSM name" Placeholder="my-hsm" AutoComplete="off" data-role="hsm-input" />
+                <FluentTextField @bind-Value="_refName" Immediate="true" ImmediateDelay="0" Label="Reference name" Placeholder="ekm-key" AutoComplete="off" data-role="refname-input" />
+            </div>
+            <pre class="code-block" data-role="az-command">@AzCommand(detail)</pre>
+            <CopyButton Text="@AzCommand(detail)" Title="Copy the az command" Confirmation="Command copied to the clipboard">Copy command</CopyButton>
+            <p class="detail-note">The value after <code>--external-key-id</code> is this key's name. The reference name is the name the key gets in Managed HSM.</p>
+        }
+
+        @if (detail.PublicKey is { } pub)
+        {
+            <h3>RSA public key <span class="detail-note">(public only; the private key never leaves the engine)</span></h3>
+            <h4>PEM</h4>
+            <pre class="code-block" data-role="public-pem">@pub.Pem</pre>
+            <CopyButton Text="@pub.Pem" Title="Copy the public key PEM" Confirmation="Public key copied">Copy PEM</CopyButton>
+            <h4>JWK</h4>
+            <dl class="detail-grid">
+                <dt>n</dt><dd class="wrap-anywhere"><code data-role="jwk-n">@pub.JwkN</code> <CopyButton Text="@pub.JwkN" Title="Copy n" Confirmation="n copied" /></dd>
+                <dt>e</dt><dd><code data-role="jwk-e">@pub.JwkE</code> <CopyButton Text="@pub.JwkE" Title="Copy e" Confirmation="e copied" /></dd>
+            </dl>
+            <pre class="code-block" data-role="jwk">@pub.Jwk</pre>
+            <CopyButton Text="@pub.Jwk" Title="Copy the JWK" Confirmation="JWK copied">Copy JWK</CopyButton>
+        }
+    </section>
+}
+
+@code {
+    private sealed record Message(AlertIntent Intent, string Text);
+
+    private static readonly string[] ImportTypes = ["AES-256 (raw key)", "RSA (PKCS#8 private key)"];
+
+    private List<IGrouping<string, KeyView>> _groups = [];
+    private List<string> _namespaceNames = [];
+    private Message? _message;
+    private KeyDetail? _detail;
+    private string? _detailNamespace;
+    private string? _detailName;
+
+    private bool _showCreate;
+    private string? _createNamespace;
+    private string? _createName = string.Empty;
+    private KeyTypeOption _createType = KeyTypeOption.All[0];
+    private bool _offerReuse;
+    private bool _createReuse;
+
+    private bool _showImport;
+    private string? _importNamespace;
+    private string? _importName = string.Empty;
+    private string _importType = ImportTypes[0];
+    private string? _importMaterial = string.Empty;
+
+    // Remembered in this circuit's memory only (never persisted): the user types them to get a ready-to-run command.
+    private string? _hsm = string.Empty;
+    private string? _refName = string.Empty;
+    private string? _expiryText = string.Empty;
+
+    private string? NameProblem
+        => string.IsNullOrEmpty(_createName) ? "Enter a key name."
+            : EkmNames.IsValidKeyName(_createName) ? null
+            : "Only letters, digits and '-' are allowed, at most 64 characters.";
+
+    protected override void OnInitialized() => Load();
+
+    private void Load()
+    {
+        try
+        {
+            _namespaceNames = [.. Namespaces.List().Select(static n => n.Name)];
+            _groups = [.. Keys.List().GroupBy(static k => k.Namespace)];
+            _createNamespace ??= _namespaceNames.FirstOrDefault();
+            _importNamespace ??= _namespaceNames.FirstOrDefault();
+            if (_detailNamespace is not null && _detailName is not null)
+            {
+                _detail = Keys.Get(_detailNamespace, _detailName);
+            }
+        }
+        catch (ConsoleActionException exception)
+        {
+            _message = new Message(AlertIntent.Error, exception.Message);
+        }
+    }
+
+    private void Reload() => Load();
+
+    private void ToggleCreate() => _showCreate = !_showCreate;
+
+    private void ToggleImport() => _showImport = !_showImport;
+
+    private void DismissMessage() => _message = null;
+
+    private static string StateIcon(KeyView key) => key.State switch
+    {
+        "Enabled" => "●",
+        "Disabled" => "○",
+        "Expired" => "◔",
+        "Destroyed" => "✕",
+        _ => "⚠",
+    };
+
+    private string AzCommand(KeyDetail detail)
+        => KeyAdminService.AzCommand(detail.Key.Name, string.IsNullOrWhiteSpace(_hsm) ? "<hsm>" : _hsm.Trim(), string.IsNullOrWhiteSpace(_refName) ? "<ref-name>" : _refName.Trim());
+
+    private async Task<string> ActorAsync() => (await CurrentUser.GetAsync()).AuditName;
+
+    private async Task RunAsync(Func<string, Task> action, string success)
+    {
+        _message = null;
+        try
+        {
+            await action(await ActorAsync());
+            _message = new Message(AlertIntent.Success, success);
+            Toasts.ShowSuccess(success);
+        }
+        catch (ConsoleActionException exception)
+        {
+            _message = new Message(AlertIntent.Error, exception.Message);
+            Toasts.ShowError(exception.Message);
+        }
+
+        Load();
+    }
+
+    private async Task CreateAsync()
+    {
+        var request = new CreateKeyRequest(_createNamespace ?? string.Empty, _createName ?? string.Empty, _createType.Type, _createType.Size, _createReuse);
+        _offerReuse = false;
+        await RunAsync(actor =>
+        {
+            Keys.Create(actor, request);
+            _createName = string.Empty;
+            _createReuse = false;
+            return Task.CompletedTask;
+        }, $"Key {request.Name} created in {request.Namespace}.");
+
+        // A name with a tombstone is reserved: offer the explicit override instead of silently reusing it.
+        if (_message is { Intent: AlertIntent.Error, Text: var text } && text.Contains("destroyed", StringComparison.OrdinalIgnoreCase))
+        {
+            _offerReuse = true;
+        }
+    }
+
+    private async Task ImportAsync()
+    {
+        // The material leaves the component state before anything else happens; the buffer is zeroed as soon as the engine has it.
+        var text = _importMaterial;
+        _importMaterial = string.Empty;
+        var type = _importType == ImportTypes[0] ? KeyType.Oct : KeyType.Rsa;
+        var ns = _importNamespace ?? string.Empty;
+        var name = _importName ?? string.Empty;
+        var material = KeyMaterialInput.TryDecode(type, text);
+        text = null;
+        if (material is null)
+        {
+            _message = new Message(AlertIntent.Error, "The key material is not valid for this key type. (The value is not shown again.)");
+            return;
+        }
+
+        try
+        {
+            await RunAsync(actor =>
+            {
+                Keys.Import(actor, ns, name, type, material);
+                return Task.CompletedTask;
+            }, $"Key {name} imported into {ns} (badge: Imported).");
+        }
+        finally
+        {
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(material);
+        }
+    }
+
+    private Task SelectAsync(KeyView key)
+    {
+        try
+        {
+            _detail = Keys.Get(key.Namespace, key.Name);
+            _detailNamespace = key.Namespace;
+            _detailName = key.Name;
+            _expiryText = key.NotAfter?.UtcDateTime.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) ?? string.Empty;
+        }
+        catch (ConsoleActionException exception)
+        {
+            _message = new Message(AlertIntent.Error, exception.Message);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private void CloseDetail()
+    {
+        _detail = null;
+        _detailNamespace = null;
+        _detailName = null;
+    }
+
+    private Task ToggleEnabledAsync(KeyView key)
+    {
+        var enable = key.State == "Disabled";
+        return RunAsync(actor =>
+        {
+            Keys.SetEnabled(actor, key.Namespace, key.Name, enable);
+            return Task.CompletedTask;
+        }, $"Key {key.Name} {(enable ? "enabled" : "disabled")}.");
+    }
+
+    private Task SetExpiryAsync()
+    {
+        if (_detail is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        if (!DateTimeOffset.TryParse(_expiryText?.Trim(), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var notAfter))
+        {
+            _message = new Message(AlertIntent.Error, "Enter the expiry as a date and time (UTC).");
+            return Task.CompletedTask;
+        }
+
+        var key = _detail.Key;
+        return RunAsync(actor =>
+        {
+            Keys.SetExpiry(actor, key.Namespace, key.Name, notAfter);
+            return Task.CompletedTask;
+        }, $"Expiry of {key.Name} set to {notAfter.UtcDateTime:yyyy-MM-dd HH:mm} UTC.");
+    }
+
+    private Task ClearExpiryAsync()
+    {
+        if (_detail is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        var key = _detail.Key;
+        _expiryText = string.Empty;
+        return RunAsync(actor =>
+        {
+            Keys.SetExpiry(actor, key.Namespace, key.Name, null);
+            return Task.CompletedTask;
+        }, $"Expiry of {key.Name} cleared.");
+    }
+
+    private async Task DestroyAsync(KeyView key)
+    {
+        var dialog = await Dialogs.ShowDialogAsync<TypedConfirmDialog, TypedConfirmData>(
+            new TypedConfirmData(
+                $"Destroy key {key.Namespace}/{key.Name}? This is an irreversible crypto-shred.",
+                key.Name,
+                "Destroy key",
+                [
+                    "The key material is deleted. Anything wrapped with this key can never be unwrapped again.",
+                    "Requests for the key answer 404 KeyNotFound.",
+                    "A tombstone keeps the name reserved, so it cannot be reused by accident.",
+                ]),
+            new DialogParameters
+            {
+                Title = "Destroy key",
+                ShowDismiss = true,
+                PrimaryAction = null,
+                SecondaryAction = null,
+                PreventDismissOnOverlayClick = true,
+                Width = "520px",
+            });
+        var result = await dialog.Result;
+        if (result.Cancelled || result.Data is not TypedConfirmResult confirmed)
+        {
+            return;
+        }
+
+        if (_detailName == key.Name && _detailNamespace == key.Namespace)
+        {
+            CloseDetail();
+        }
+
+        await RunAsync(actor =>
+        {
+            Keys.Destroy(actor, key.Namespace, key.Name, confirmed.Typed);
+            return Task.CompletedTask;
+        }, $"Key {key.Name} destroyed. The name stays reserved.");
+    }
+}

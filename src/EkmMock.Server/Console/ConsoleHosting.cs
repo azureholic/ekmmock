@@ -29,6 +29,23 @@ internal static class ConsoleServiceCollectionExtensions
         services.TryAddSingleton<IFaultStatus, NoFaultStatus>();
         services.TryAddSingleton<IConsoleStatusProvider, ConsoleStatusProvider>();
 
+        // M6: the console actions. One set of services shared by the Blazor pages and /api/console/*, so both write the same audit entries.
+        services.TryAddSingleton<AuditRecorder>();
+        services.TryAddSingleton<ConsoleTestIdentity>();
+        // The certificate provider is resolved when the first self-call happens: it throws when no certificate is configured, and the inspector (which holds the replay sender) must still start.
+        services.TryAddSingleton(static sp => new EkmSelfClient(
+            sp.GetRequiredService<ConsoleTestIdentity>(),
+            () => sp.GetRequiredService<Tls.IServerCertificateProvider>().Current.Thumbprint,
+            () => sp.GetRequiredService<ListenerRegistry>().EndpointsOf(ListenerRegistry.EkmName)));
+        services.TryAddSingleton<KeyAdminService>();
+        services.TryAddSingleton<NamespaceAdminService>();
+        services.TryAddSingleton<CertificateAdminService>();
+        services.TryAddSingleton<PlaygroundService>();
+        services.TryAddSingleton<AboutService>();
+        services.TryAddSingleton<IAboutService>(static sp => sp.GetRequiredService<AboutService>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<Inspector.IReplaySender, ConsoleReplaySender>());
+        services.AddHostedService<ConsoleDevBootstrap>();
+
         services.AddRazorComponents().AddInteractiveServerComponents();
         services.AddFluentUIComponents();
         services.AddHttpContextAccessor();

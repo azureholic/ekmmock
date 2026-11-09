@@ -1,0 +1,144 @@
+@page "/audit"
+@using EkmMock.Server.Inspector
+@inject IAuditLog Audit
+
+<PageTitle>Audit log - EkmMock console</PageTitle>
+
+<h1 tabindex="-1">Audit log</h1>
+<p class="page-intro">Who did what, when and to what. Every state-changing console action, every reveal and every replay is recorded. The log is append-only: this page can only read it, and it never contains secrets, DEKs, private keys or uploaded key material.</p>
+
+<section class="dashboard-card" aria-labelledby="filter-title" data-role="audit-filters">
+    <h2 id="filter-title" class="card-title">Filter</h2>
+    <div class="live-filters">
+        <div class="filter-field">
+            <FluentTextField @bind-Value="_user" Label="User" AutoComplete="off" data-role="filter-user" />
+        </div>
+        <div class="filter-field">
+            <FluentSelect TOption="string" Label="Action" Items="@_actions" @bind-SelectedOption="_action" OptionText="@(a => a.Length == 0 ? "All actions" : a)" OptionValue="@(a => a)" data-role="filter-action" />
+        </div>
+        <div class="filter-field">
+            <FluentTextField @bind-Value="_text" Label="Text (target or detail)" AutoComplete="off" data-role="filter-text" />
+        </div>
+        <div class="filter-field">
+            <FluentTextField @bind-Value="_from" Label="From (UTC, yyyy-MM-dd HH:mm)" Placeholder="2026-11-09 08:00" AutoComplete="off" data-role="filter-from" />
+        </div>
+        <div class="filter-field">
+            <FluentTextField @bind-Value="_to" Label="To (UTC, yyyy-MM-dd HH:mm)" AutoComplete="off" data-role="filter-to" />
+        </div>
+        <div class="filter-field">
+            <FluentButton Appearance="Appearance.Accent" OnClick="Apply" data-role="filter-apply">Apply</FluentButton>
+            <FluentButton Appearance="Appearance.Neutral" OnClick="Reset" data-role="filter-reset">Reset</FluentButton>
+        </div>
+    </div>
+    @if (_filterProblem is not null)
+    {
+        <ConsoleAlert Intent="AlertIntent.Error" DataRole="filter-error">@_filterProblem</ConsoleAlert>
+    }
+</section>
+
+<section class="dashboard-card" aria-labelledby="entries-title" data-role="audit-entries">
+    <h2 id="entries-title" class="card-title">Entries, newest first <span class="count-note" role="status" data-role="audit-count">(@_page.Total @(_page.Total == 1 ? "match" : "matches"))</span></h2>
+    @if (_page.Entries.Count == 0)
+    {
+        <p class="chart-empty" data-role="audit-empty">No audit entries match.</p>
+    }
+    else
+    {
+        <div class="grid-scroll grid-medium"><FluentDataGrid Items="@_page.Entries.AsQueryable()" TGridItem="AuditEntry" ResizableColumns="false" GridTemplateColumns="1.5fr 1.4fr 2.6fr 2.2fr 2fr" aria-label="Audit log">
+            <TemplateColumn Title="Time (UTC)"><span data-role="audit-time" title="@ConsoleDisplay.FullTime(context.At)">@context.At.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)</span></TemplateColumn>
+            <TemplateColumn Title="User"><span data-role="audit-user">@context.User</span></TemplateColumn>
+            <TemplateColumn Title="Action"><code data-role="audit-action">@context.Action</code></TemplateColumn>
+            <TemplateColumn Title="Target"><span class="wrap-anywhere" data-role="audit-target">@context.Target</span></TemplateColumn>
+            <TemplateColumn Title="Detail"><span class="wrap-anywhere" data-role="audit-detail">@context.Detail</span></TemplateColumn>
+        </FluentDataGrid></div>
+        <div class="inline-form pager" role="navigation" aria-label="Audit log pages">
+            <FluentButton Appearance="Appearance.Neutral" Disabled="@(_page.Skip == 0)" OnClick="Newer" data-role="page-newer">Newer</FluentButton>
+            <span data-role="page-range">@(_page.Skip + 1) to @(_page.Skip + _page.Entries.Count) of @_page.Total</span>
+            <FluentButton Appearance="Appearance.Neutral" Disabled="@(_page.Skip + _page.Entries.Count >= _page.Total)" OnClick="Older" data-role="page-older">Older</FluentButton>
+            <FluentButton Appearance="Appearance.Lightweight" OnClick="Reload" data-role="refresh">Refresh</FluentButton>
+        </div>
+    }
+</section>
+
+@code {
+    internal const int PageSize = 25;
+
+    private readonly List<string> _actions = ["", .. AuditActions.All.Order(StringComparer.Ordinal)];
+    private AuditPage _page = new([], 0, 0, PageSize);
+    private string? _user = string.Empty;
+    private string _action = string.Empty;
+    private string? _text = string.Empty;
+    private string? _from = string.Empty;
+    private string? _to = string.Empty;
+    private string? _filterProblem;
+    private AuditFilter _filter = new();
+    private int _skip;
+
+    protected override void OnInitialized() => Load();
+
+    private void Load() => _page = Audit.Query(_filter, _skip, PageSize);
+
+    private void Reload() => Load();
+
+    private void Apply()
+    {
+        if (!TryParse(_from, out var from) || !TryParse(_to, out var to))
+        {
+            _filterProblem = "Enter dates as yyyy-MM-dd or yyyy-MM-dd HH:mm (UTC).";
+            return;
+        }
+
+        _filterProblem = null;
+        _filter = new AuditFilter
+        {
+            User = Blank(_user),
+            Action = Blank(_action),
+            Text = Blank(_text),
+            From = from,
+            To = to,
+        };
+        _skip = 0;
+        Load();
+    }
+
+    private void Reset()
+    {
+        _user = _text = _from = _to = string.Empty;
+        _action = string.Empty;
+        _filterProblem = null;
+        _filter = new AuditFilter();
+        _skip = 0;
+        Load();
+    }
+
+    private void Newer()
+    {
+        _skip = Math.Max(0, _skip - PageSize);
+        Load();
+    }
+
+    private void Older()
+    {
+        _skip += PageSize;
+        Load();
+    }
+
+    private static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static bool TryParse(string? text, out DateTimeOffset? value)
+    {
+        value = null;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return true;
+        }
+
+        if (DateTimeOffset.TryParse(text.Trim(), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var parsed))
+        {
+            value = parsed;
+            return true;
+        }
+
+        return false;
+    }
+}

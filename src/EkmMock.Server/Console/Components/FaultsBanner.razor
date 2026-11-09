@@ -4,11 +4,9 @@
 @* Spec 10.2: "A banner at the top of every console page says faults are active." Fault injection arrives with M7; the banner follows IFaultStatus from now on. *@
 @if (Faults.Active)
 {
-    <div class="console-banner banner-faults" role="alert" data-role="faults-banner">
-        <FluentMessageBar Intent="MessageIntent.Warning" AllowDismiss="false" Title="Faults active">
-            Fault injection is active: EKM requests may be delayed, failed or dropped on purpose.
-        </FluentMessageBar>
-    </div>
+    <ConsoleAlert Intent="AlertIntent.Warning" Title="Faults active" DataRole="faults-banner" Class="console-banner banner-faults">
+        Fault injection is active: EKM requests may be delayed, failed or dropped on purpose.
+    </ConsoleAlert>
 }
 
 @code {

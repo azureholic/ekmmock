@@ -1,0 +1,205 @@
+@page "/certificates"
+@inject CertificateAdminService Certificates
+@inject IConsoleUser CurrentUser
+@inject IToastService Toasts
+@inject TimeProvider Time
+
+<PageTitle>Certificates - EkmMock console</PageTitle>
+
+<h1 tabindex="-1">Certificates</h1>
+<p class="page-intro">The TLS server certificate of the EKM endpoint. Managed HSM checks that it chains to the root CA you gave <code>--server-ca-certificate</code> and that its SAN matches <code>--host</code>. A new certificate is served to new connections at once; open connections keep the old one until they close.</p>
+
+<div role="status" aria-live="polite" data-role="messages">
+    @if (_message is { } message)
+    {
+        <ConsoleAlert Intent="message.Intent" DataRole="action-result" OnDismiss="DismissMessage">@message.Text</ConsoleAlert>
+    }
+</div>
+
+@if (_page is { } model)
+{
+    var cert = model.Certificate;
+    @foreach (var warning in model.Warnings)
+    {
+        <ConsoleAlert Intent="@(cert.IsExpired ? AlertIntent.Error : AlertIntent.Warning)" DataRole="cert-warning">@warning</ConsoleAlert>
+    }
+
+    @if (model.LastError is not null)
+    {
+        <ConsoleAlert Intent="AlertIntent.Error" Title="The last reload or upload failed" DataRole="reload-error">@model.LastError (at @(model.LastErrorAt is { } at ? ConsoleDisplay.FullTime(at) : "unknown time")). The certificate below is still the one being served.</ConsoleAlert>
+    }
+
+    <section class="dashboard-card" aria-labelledby="current-title" data-role="current-certificate">
+        <h2 id="current-title" class="card-title">Current EKM server certificate</h2>
+        <dl class="detail-grid">
+            <dt>Subject</dt><dd class="wrap-anywhere" data-role="cert-subject">@cert.Subject</dd>
+            <dt>Subject alternative names</dt>
+            <dd data-role="cert-san">
+                @if (cert.SubjectAlternativeNames.Count == 0)
+                {
+                    <span class="status-client">none</span>
+                }
+                else
+                {
+                    @string.Join(", ", cert.SubjectAlternativeNames)
+                }
+            </dd>
+            <dt>Issuer</dt><dd class="wrap-anywhere" data-role="cert-issuer">@cert.Issuer</dd>
+            <dt>Chain served</dt>
+            <dd data-role="cert-chain">
+                <ol class="chain-list">
+                    @foreach (var subject in cert.Chain)
+                    {
+                        <li class="wrap-anywhere">@subject</li>
+                    }
+                </ol>
+                <span class="detail-note">The root CA is never sent; clients must already trust it.</span>
+            </dd>
+            <dt>Valid</dt><dd data-role="cert-validity">@cert.NotBefore.UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) to @cert.NotAfter.UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)</dd>
+            <dt>Expires in</dt>
+            <dd data-role="cert-expiry" class="@(cert.IsExpired ? "status-server" : cert.ExpiresSoon ? "status-client" : "status-ok")">
+                @(cert.IsExpired ? "EXPIRED" : cert.ExpiresSoon ? $"⚠ {cert.DaysRemaining} day(s) (renew soon)" : $"{cert.DaysRemaining} day(s)")
+            </dd>
+            <dt>SHA-256 thumbprint</dt><dd class="wrap-anywhere"><code data-role="cert-thumbprint">@cert.ThumbprintSha256</code></dd>
+            <dt>Source</dt><dd data-role="cert-source">@SourceText(cert)</dd>
+            <dt>Storage</dt><dd>@model.StorageNote</dd>
+        </dl>
+    </section>
+
+    <section class="dashboard-card" aria-labelledby="tls-title" data-role="tls-policy">
+        <h2 id="tls-title" class="card-title">Effective TLS policy</h2>
+        <dl class="detail-grid">
+            <dt>Protocol</dt><dd>@model.Tls.Protocol</dd>
+            <dt>Cipher suites</dt><dd>@string.Join(", ", model.Tls.PermittedCipherSuites)</dd>
+            <dt>Enforcement</dt>
+            <dd data-role="tls-enforcement" class="@(model.Tls.CipherSuitesEnforced ? "status-ok" : "status-client")">@(model.Tls.CipherSuitesEnforced ? "✔ enforced by the TLS stack" : "⚠ not enforceable on this OS") <span class="detail-note">@model.Tls.Summary</span></dd>
+        </dl>
+    </section>
+
+    <section class="dashboard-card form-card" aria-labelledby="gen-title" data-role="generate-form">
+        <h2 id="gen-title" class="card-title">Generate a test root CA and server certificate</h2>
+        <p class="detail-note">For testing with Managed HSM: creates a new root CA and a server certificate for your FQDN, serves it at once and keeps the <strong>public</strong> root CA certificate for download (<code>root-ca.pem</code>, the value of <code>--server-ca-certificate</code>). The CA's private key is discarded after signing and can never be downloaded; generating again creates a new root.</p>
+        <div class="inline-form">
+            <FluentTextField @bind-Value="_fqdn" Immediate="true" ImmediateDelay="0" Label="FQDN (the --host value)" Placeholder="ekm.example.com" AutoComplete="off" data-role="fqdn" aria-describedby="fqdn-help" />
+            <FluentButton Appearance="Appearance.Accent" Disabled="@(FqdnProblem is not null)" OnClick="GenerateAsync" data-role="generate-submit">Generate and install</FluentButton>
+        </div>
+        <span id="fqdn-help" class="field-help @(FqdnProblem is null || string.IsNullOrWhiteSpace(_fqdn) ? null : "field-invalid")" data-role="fqdn-message">@(FqdnProblem ?? "A DNS name or IP address. Separate several names with commas.")</span>
+    </section>
+
+    @if (model.RootCaAvailable || _generated is not null)
+    {
+        <section class="dashboard-card" aria-labelledby="root-title" data-role="root-ca">
+            <h2 id="root-title" class="card-title">Root CA for <code>--server-ca-certificate</code></h2>
+            <p>@(_generated?.RootCaSubject ?? model.RootCaSubject)</p>
+            <p><a class="download-link" href="/api/console/certificates/root-ca.pem" download="root-ca.pem" data-role="root-ca-download">Download root-ca.pem</a> <span class="detail-note">(public certificate only)</span></p>
+            @if (_generated is { } generated)
+            {
+                <pre class="code-block" data-role="root-ca-pem">@generated.RootCaPem</pre>
+                <CopyButton Text="@generated.RootCaPem" Title="Copy the root CA PEM" Confirmation="Root CA copied">Copy PEM</CopyButton>
+            }
+        </section>
+    }
+
+    <section class="dashboard-card form-card" aria-labelledby="upload-title" data-role="upload-form">
+        <h2 id="upload-title" class="card-title">Upload a certificate</h2>
+        <p class="detail-note">Paste the certificate chain (leaf first, then intermediates; PEM) and its unencrypted private key (PEM). Both are checked before anything changes: the key must belong to the certificate and the certificate needs a SAN. The key is written only to the server's own key file, and is never shown, logged or returned.</p>
+        <FluentTextArea @bind-Value="_certPem" Label="Certificate chain (PEM)" Rows="6" Spellcheck="false" Resize="TextAreaResize.Vertical" data-role="upload-cert" />
+        <FluentTextArea @bind-Value="_keyPem" Label="Private key (PEM)" Rows="4" Spellcheck="false" AutoComplete="off" Resize="TextAreaResize.Vertical" data-role="upload-key" />
+        <FluentButton Appearance="Appearance.Accent" OnClick="UploadAsync" data-role="upload-submit">Validate and install</FluentButton>
+    </section>
+}
+
+@code {
+    private sealed record Message(AlertIntent Intent, string Text);
+
+    private CertificatePageModel? _page;
+    private Message? _message;
+    private GeneratedPki? _generated;
+    private string? _fqdn = string.Empty;
+    private string? _certPem = string.Empty;
+    private string? _keyPem = string.Empty;
+
+    private string? FqdnProblem
+    {
+        get
+        {
+            var names = (_fqdn ?? string.Empty).Split([',', ' ', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (names.Length == 0)
+            {
+                return "Enter the FQDN.";
+            }
+
+            var bad = names.FirstOrDefault(static n => !CertificateAdminService.IsValidHostName(n));
+            return bad is null ? null : $"'{(bad.Length > 30 ? bad[..30] + "…" : bad)}' is not a valid DNS name or IP address.";
+        }
+    }
+
+    protected override void OnInitialized() => Load();
+
+    private void Load()
+    {
+        try
+        {
+            _page = Certificates.GetPage();
+        }
+        catch (ConsoleActionException exception)
+        {
+            _message = new Message(AlertIntent.Error, exception.Message);
+        }
+    }
+
+    private void DismissMessage() => _message = null;
+
+    private static string SourceText(ServerCertificateView cert) => cert.Source switch
+    {
+        "File" => "Configured files (Tls:CertFile / Tls:KeyFile)",
+        "Uploaded" => "Uploaded in the console (or saved on the data volume)",
+        "ConsoleGenerated" => "Generated test PKI",
+        "DevelopmentGenerated" => "Throw-away development certificate (dev mode)",
+        _ => cert.Source,
+    };
+
+    private async Task<string> ActorAsync() => (await CurrentUser.GetAsync()).AuditName;
+
+    private async Task UploadAsync()
+    {
+        // The key and certificate leave the component state at once; only the service call holds them.
+        var cert = _certPem;
+        var key = _keyPem;
+        _keyPem = string.Empty;
+        _message = null;
+        try
+        {
+            var installed = await Certificates.UploadAsync(await ActorAsync(), cert, key);
+            _certPem = string.Empty;
+            _generated = null;
+            _message = new Message(AlertIntent.Success, $"The certificate for {string.Join(", ", installed.SubjectAlternativeNames)} is installed and served to new connections.");
+            Toasts.ShowSuccess("Certificate installed");
+        }
+        catch (ConsoleActionException exception)
+        {
+            _message = new Message(AlertIntent.Error, exception.Message);
+            Toasts.ShowError("The certificate was not installed");
+        }
+
+        Load();
+    }
+
+    private async Task GenerateAsync()
+    {
+        _message = null;
+        try
+        {
+            _generated = await Certificates.GenerateTestPkiAsync(await ActorAsync(), [_fqdn ?? string.Empty]);
+            _message = new Message(AlertIntent.Success, $"Test PKI generated and installed for {string.Join(", ", _generated.Certificate.SubjectAlternativeNames)}. Download root-ca.pem and use it as --server-ca-certificate.");
+            Toasts.ShowSuccess("Test PKI generated");
+        }
+        catch (ConsoleActionException exception)
+        {
+            _message = new Message(AlertIntent.Error, exception.Message);
+            Toasts.ShowError("Test PKI was not generated");
+        }
+
+        Load();
+    }
+}

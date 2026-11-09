@@ -1,11 +1,10 @@
 @inject IConsoleStatusProvider Status
 
-@* Spec 5.2/M1: a throw-away master key means every key created now is lost on restart. Red, with a word and an icon (never colour alone). *@
+@* Spec 5.2/M1: a throw-away master key means every key created now is lost on restart. Red, with a word and an icon (never colour alone). Uses ConsoleAlert (not the Fluent
+   message bar, whose light-theme text contrast failed WCAG AA in the M5 visual review). *@
 @if (Status.Get().DevMasterKey)
 {
-    <div class="console-banner banner-dev" role="alert" data-role="dev-banner">
-        <FluentMessageBar Intent="MessageIntent.Error" AllowDismiss="false" Title="DEV MODE: throw-away master key">
-            The master key of this process exists only in memory. Keys created now cannot be read after a restart. Never protect real data with this instance.
-        </FluentMessageBar>
-    </div>
+    <ConsoleAlert Intent="AlertIntent.Error" Title="DEV MODE: throw-away master key" DataRole="dev-banner" Class="console-banner banner-dev">
+        The master key of this process exists only in memory. Keys created now cannot be read after a restart. Never protect real data with this instance.
+    </ConsoleAlert>
 }

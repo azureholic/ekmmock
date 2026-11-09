@@ -19,7 +19,7 @@ internal sealed partial class DetailJsonContext : JsonSerializerContext
 
 /// <summary>
 /// The Exchange detail (spec 8.5.2): Overview, TLS &amp; client certificate, Request, Response and Timing tabs, copy buttons, the ready-made KQL snippet, a Replay button
-/// that is enabled only when replay is possible (it says "implemented in M6" until then) and per-field Reveal when reveal is allowed (audited, shown for a short time, never
+/// that is enabled only when replay is possible (it sends the same request through the real EKM endpoint with the console test client certificate, audited) and per-field Reveal when reveal is allowed (audited, shown for a short time, never
 /// put in a URL, storage or export). Used as the side panel of Live traffic and as the <c>/exchange/{id}</c> page.
 /// </summary>
 public sealed partial class ExchangeDetailView : IDisposable
@@ -44,6 +44,8 @@ public sealed partial class ExchangeDetailView : IDisposable
     private ReplayCheck _replay;
     private string _tab = "overview";
     private string? _replayMessage;
+    private long? _replayExchangeId;
+    private bool _replayBusy;
     private string? _json;
     private long _loadedId = -1;
     private RevealedField? _revealed;
@@ -79,7 +81,7 @@ public sealed partial class ExchangeDetailView : IDisposable
     private bool RevealAllowed => Status.Get().RevealAllowed;
 
     private string ReplayTitle => _replay.Possible
-        ? "Send this request again through the EKM endpoint with the console's test client certificate (arrives with M6)."
+        ? "Send this request again through the EKM endpoint with the console's test client certificate (audited)."
         : _replay.Reason switch
         {
             ReplayBlockReason.RevealNotAllowed => "Replay needs the raw request body, which is kept only when reveal is allowed (EKMMOCK_INSPECTOR_ALLOW_REVEAL=true and Inspector:SecretDisplay=Reveal).",
@@ -107,8 +109,65 @@ public sealed partial class ExchangeDetailView : IDisposable
 
     private string ExchangeJson(ExchangeRecord record) => _json ?? JsonSerializer.Serialize(record, DetailJsonContext.Default.ExchangeRecord);
 
-    // Replay is not faked: the seam exists (IInspector.ReplayAsync, M4) but the console's test client certificate arrives with M6.
-    private void ShowReplayNote() => _replayMessage = "Replay is implemented in M6.";
+    // Replay (M6): the same request is sent again through the real EKM endpoint with the console test client certificate (IInspector.ReplayAsync audits it as
+    // inspector.replay). The new exchange is then looked up (it is captured asynchronously) so that the user can follow it into Live traffic.
+    private async Task ReplayAsync()
+    {
+        if (_record is null || _replayBusy)
+        {
+            return;
+        }
+
+        _replayBusy = true;
+        _replayMessage = null;
+        _replayExchangeId = null;
+        try
+        {
+            var user = await CurrentUser.GetAsync();
+            var outcome = await Inspector.ReplayAsync(ExchangeId, user.AuditName);
+            if (!outcome.Sent)
+            {
+                _replayMessage = outcome.Note ?? "The request was not sent.";
+                return;
+            }
+
+            _replayMessage = $"Replayed: the EKM endpoint answered {outcome.Status}.{(outcome.Note is null ? string.Empty : " " + outcome.Note)}";
+            _replayExchangeId = await FindReplayAsync(_record);
+        }
+        catch (InspectorReplayException exception)
+        {
+            _replayMessage = exception.Reason switch
+            {
+                ReplayBlockReason.RevealNotAllowed => "Replay needs the raw request body, which is only kept when reveal is allowed.",
+                ReplayBlockReason.BodyNotRetained => "The raw request body of this exchange was not kept.",
+                _ => "The exchange is no longer in the inspector.",
+            };
+        }
+        finally
+        {
+            _replayBusy = false;
+        }
+    }
+
+    // The replay is the newest exchange of the console test client for the same key and operation after the original.
+    private async Task<long?> FindReplayAsync(ExchangeRecord original)
+    {
+        var filter = new ExchangeFilter { ClientCommonName = ConsoleTestIdentity.CommonName, Key = original.Request.Key, Operation = original.Request.Operation };
+        var paging = new ExchangePaging { Limit = 1, AfterId = original.Id };
+        var started = Time.GetTimestamp();
+        while (Time.GetElapsedTime(started) < TimeSpan.FromSeconds(3))
+        {
+            var page = Inspector.Query(filter, paging);
+            if (page.Items.Count > 0)
+            {
+                return page.Items[0].Id;
+            }
+
+            await Task.Delay(25);
+        }
+
+        return null;
+    }
 
     private async Task RevealAsync(string field)
     {

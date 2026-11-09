@@ -2,9 +2,9 @@
    Nothing here is loaded from outside this process (no CDN, no web fonts). Status and budget are always shown as text as well as colour. */
 
 :root {
-    --ekm-error: color-mix(in srgb, var(--error, #c4314b) 78%, var(--neutral-foreground-rest, #242424));
+    --ekm-error: color-mix(in srgb, var(--error, #c4314b) 60%, var(--neutral-foreground-rest, #242424));
     --ekm-success: color-mix(in srgb, var(--success, #107c10) 70%, var(--neutral-foreground-rest, #242424));
-    --ekm-warning: color-mix(in srgb, var(--warning, #bc4b09) 72%, var(--neutral-foreground-rest, #242424));
+    --ekm-warning: color-mix(in srgb, var(--warning, #bc4b09) 52%, var(--neutral-foreground-rest, #242424));
     --ekm-muted: color-mix(in srgb, var(--neutral-foreground-rest, #242424) 68%, var(--neutral-layer-1, #ffffff));
     --ekm-border: var(--neutral-stroke-divider-rest, #e0e0e0);
     --ekm-card: var(--neutral-layer-2, #f5f5f5);
@@ -219,3 +219,73 @@ a { color: var(--accent-foreground-rest, #0f6cbd); }
     .live-split { flex-direction: column; }
     .live-detail { flex: none; width: 100%; }
 }
+
+/* ================= M6: alerts, forms, key and trust pages ================= */
+
+/* Alerts (banners and page messages). Text always uses the normal foreground token on a light tint of the status colour: WCAG AA in light and dark. The status
+   colour is only the border and the icon, and every alert also has a title or a sentence, so colour is never the only signal. */
+.console-alert { --alert-color: var(--ekm-muted); display: flex; align-items: flex-start; gap: 0.6rem; padding: 0.6rem 0.8rem; margin: 0.4rem 0 0.75rem 0; box-sizing: border-box; max-width: 100%;
+    border: 1px solid var(--alert-color); border-left-width: 6px; border-radius: 4px;
+    background: color-mix(in srgb, var(--alert-color) 12%, var(--neutral-layer-1, #fff)); color: var(--neutral-foreground-rest, #242424); }
+.console-alert .alert-icon { color: var(--alert-color); display: inline-flex; flex: 0 0 auto; margin-top: 0.1rem; }
+.console-alert .alert-body { flex: 1; min-width: 0; overflow-wrap: anywhere; line-height: 1.4; }
+.console-alert .alert-title { margin-right: 0.5rem; }
+.console-alert .alert-dismiss { background: transparent; border: 1px solid var(--ekm-border); color: inherit; border-radius: 4px; padding: 0.15rem 0.6rem; cursor: pointer; font: inherit; }
+.console-alert.intent-error { --alert-color: var(--ekm-error); }
+.console-alert.intent-warning { --alert-color: var(--ekm-warning); }
+.console-alert.intent-success { --alert-color: var(--ekm-success); }
+.console-alert.intent-info { --alert-color: var(--accent-fill-rest, #0f6cbd); }
+.console-banner.console-alert { margin-bottom: 0.75rem; }
+
+/* Pages */
+.toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; }
+.form-card { max-width: 70rem; }
+.form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 0.6rem 1rem; align-items: start; margin-bottom: 0.6rem; }
+.form-grid .wide { grid-column: 1 / -1; }
+.inline-form { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: end; margin: 0.4rem 0; }
+.field-help { display: block; color: var(--ekm-muted); font-size: 0.85rem; margin-top: 0.15rem; }
+.field-invalid { color: var(--ekm-error); font-weight: 600; }
+.mode-field { border: 0; padding: 0; margin: 0 0 0.6rem 0; }
+.mode-field legend { font-weight: 600; padding: 0; margin-bottom: 0.25rem; }
+.wrap-anywhere { overflow-wrap: anywhere; }
+.count-note { color: var(--ekm-muted); font-weight: 400; font-size: 0.85em; }
+.link-button { background: transparent; border: 0; padding: 0; color: var(--accent-foreground-rest, #0f6cbd); text-decoration: underline; cursor: pointer; font: inherit; }
+.danger-text { color: var(--ekm-error); }
+.download-link { font-weight: 600; }
+.doc-links { margin: 0; padding-left: 1.2rem; }
+.chain-list { margin: 0 0 0.3rem 0; padding-left: 1.2rem; }
+.redacted { color: var(--ekm-muted); letter-spacing: 0.1em; }
+.row-failed td { background: color-mix(in srgb, var(--ekm-error) 10%, var(--neutral-layer-1, #fff)); }
+.pager { align-items: center; margin-top: 0.6rem; }
+
+/* Key state and origin: a word and a symbol next to the colour */
+.key-state { display: inline-flex; align-items: center; gap: 0.3rem; font-weight: 600; }
+.state-enabled { color: var(--ekm-success); }
+.state-disabled { color: var(--ekm-muted); }
+.state-expired { color: var(--ekm-warning); }
+.state-corrupt, .state-unavailable { color: var(--ekm-error); }
+.state-destroyed { color: var(--ekm-muted); text-decoration: line-through; }
+.badge { display: inline-block; padding: 0 0.5rem; border-radius: 999px; border: 1px solid currentColor; font-size: 0.8rem; font-weight: 600; line-height: 1.4; }
+.badge-imported { color: var(--ekm-warning); }
+
+/* Trust */
+.chip-list { list-style: none; margin: 0.3rem 0 0.6rem 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.chip { display: inline-flex; align-items: center; gap: 0.4rem; border: 1px solid var(--ekm-border); border-radius: 999px; padding: 0.1rem 0.3rem 0.1rem 0.7rem; background: var(--neutral-layer-1, #fff); }
+.chip-remove { background: transparent; border: 0; color: var(--ekm-error); cursor: pointer; font: inherit; text-decoration: underline; }
+.preview-card { border: 1px dashed var(--ekm-border); border-radius: 6px; padding: 0.6rem 0.9rem; margin-top: 0.6rem; background: var(--neutral-layer-1, #fff); }
+
+/* Confirm dialog */
+.confirm-dialog { display: flex; flex-direction: column; gap: 0.6rem; }
+.confirm-consequences { margin: 0; padding-left: 1.2rem; }
+.confirm-label { font-weight: 600; }
+.confirm-actions { display: flex; gap: 0.6rem; justify-content: flex-end; margin-top: 0.4rem; }
+
+/* Wide data grids scroll sideways inside their card instead of clipping their cells */
+.grid-scroll { overflow-x: auto; }
+.grid-scroll.grid-wide fluent-data-grid { min-width: 76rem; }
+.grid-scroll.grid-medium fluent-data-grid { min-width: 56rem; }
+
+.detail-note { font-weight: 400; }
+.dashboard-card fluent-text-area, .form-card fluent-text-area { display: block; width: 100%; }
+.dashboard-card fluent-text-area::part(control) { width: 100%; box-sizing: border-box; }
+.header-table th { white-space: nowrap; }

@@ -4,16 +4,23 @@
     <FluentNavLink Href="/" Match="NavLinkMatch.All" Icon="@(new Icons.Regular.Size20.Pulse())" data-nav="live">Live traffic</FluentNavLink>
     <FluentNavLink Href="/connections" Icon="@(new Icons.Regular.Size20.PlugConnected())" data-nav="connections">Connections</FluentNavLink>
     <FluentNavLink Href="/dashboard" Icon="@(new Icons.Regular.Size20.DataBarVertical())" data-nav="dashboard">Dashboard</FluentNavLink>
+    <FluentDivider Class="nav-divider" />
+    <FluentNavLink Href="/keys" Icon="@(new Icons.Regular.Size20.Key())" data-nav="keys">Keys</FluentNavLink>
+    <FluentNavLink Href="/namespaces" Icon="@(new Icons.Regular.Size20.PeopleCommunity())" data-nav="namespaces">Namespaces &amp; trust</FluentNavLink>
+    <FluentNavLink Href="/certificates" Icon="@(new Icons.Regular.Size20.Certificate())" data-nav="certificates">Certificates</FluentNavLink>
+    <FluentNavLink Href="/playground" Icon="@(new Icons.Regular.Size20.Beaker())" data-nav="playground">Playground</FluentNavLink>
 
     @if (Options.Value.ShowPlaceholderNavigation)
     {
-        @* Not built yet: shown so that the shape of the console is visible, but they do nothing (no fake functionality). *@
-        <FluentDivider Class="nav-divider" />
+        @* Not built yet: shown so that the shape of the console is visible, but it does nothing (no fake functionality). *@
         @foreach (var item in Placeholders)
         {
             <FluentNavLink Disabled="true" Icon="@item.Icon" Tooltip="@($"Coming in {item.Milestone}")" data-nav-placeholder="@item.Milestone">@item.Title <span class="nav-soon" aria-hidden="true">· @item.Milestone</span><span class="visually-hidden"> (coming in @item.Milestone)</span></FluentNavLink>
         }
     }
+
+    <FluentNavLink Href="/audit" Icon="@(new Icons.Regular.Size20.History())" data-nav="audit">Audit log</FluentNavLink>
+    <FluentNavLink Href="/about" Icon="@(new Icons.Regular.Size20.Info())" data-nav="about">About</FluentNavLink>
 </FluentNavMenu>
 
 @code {
@@ -21,12 +28,6 @@
 
     private static readonly Placeholder[] Placeholders =
     [
-        new("Keys", "M6", new Icons.Regular.Size20.Key()),
-        new("Namespaces & trust", "M6", new Icons.Regular.Size20.PeopleCommunity()),
-        new("Certificates", "M6", new Icons.Regular.Size20.Certificate()),
-        new("Playground", "M6", new Icons.Regular.Size20.Beaker()),
         new("Fault injection", "M7", new Icons.Regular.Size20.Flash()),
-        new("Audit log", "M6", new Icons.Regular.Size20.History()),
-        new("About", "M6", new Icons.Regular.Size20.Info()),
     ];
 }
