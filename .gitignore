@@ -30,6 +30,8 @@ coverage/
 
 # Runtime data, logs and local certificates
 /data/
+/out/
+/deploy/docker/secrets/
 **/keystore.json
 **/namespaces.json
 **/mhsm-client.json

@@ -82,6 +82,7 @@ internal static class CliApp
         root.Subcommands.Add(NamespaceCommands.Create(env, global));
         root.Subcommands.Add(FaultCommands.Create(env, global));
         root.Subcommands.Add(TestCommands.Create(env, global));
+        root.Subcommands.Add(HealthCommand.Create(env, global));
 
         ShortenDescriptions(root);
         foreach (var option in root.Options.OfType<HelpOption>())

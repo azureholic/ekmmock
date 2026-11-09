@@ -1,0 +1,66 @@
+# EkmMock: the "real" compose file (spec 11.2). One service, no secret literals, nothing writable except the data volume.
+#
+#   1. Create the master key once, outside the data volume (Linux: make it readable by the container user, uid 1654):
+#        ekmmock init --data ./data --master-key-file ./deploy/docker/secrets/ekmmock_master_key
+#        (or with the image:  docker run --rm -v "$PWD/deploy/docker/secrets:/out" -u 1654 ekmmock:local init --data /tmp/x --master-key-file /out/ekmmock_master_key)
+#        sudo chown 1654:1654 deploy/docker/secrets/ekmmock_master_key     # Linux hosts: Compose file secrets keep the host file's owner and mode
+#   2. Put the server certificate (PEM chain and PEM key) in the data volume as tls/server.crt and tls/server.key (or change Tls__CertFile / Tls__KeyFile below).
+#   3. docker compose -f deploy/docker/compose.yaml up -d --build
+#
+# For a laptop try-out with generated certificates, sample keys and a trusted fake Managed HSM use compose.dev.yaml instead.
+#
+# SECURITY: the console is an UNAUTHENTICATED admin UI (Console:Auth=LoopbackOnly). Inside the container it has to listen on the container's own address so that Docker
+# can publish it (see docs/DECISIONS.md "M9: Container-safe console binding"). That is only safe because the host side of the mapping below is 127.0.0.1.
+# NEVER change "127.0.0.1:8080:8080" to "8080:8080" or "0.0.0.0:8080:8080": that exposes an unauthenticated console to your whole network.
+# To reach the console from your laptop use an SSH tunnel to the VM's loopback:  ssh -L 8080:127.0.0.1:8080 <vm>
+
+name: ekmmock
+
+services:
+  ekmmock:
+    image: ${EKMMOCK_IMAGE:-ekmmock:local}
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+      args:
+        # Empty (the default) restores from nuget.org. Set it only on a network that cannot reach nuget.org (a package mirror URL or a local folder).
+        NUGET_SOURCE: ${NUGET_SOURCE:-}
+    container_name: ekmmock
+    restart: unless-stopped
+    # The image's own user ($APP_UID, 1654) is used: no "user:" here on purpose.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      # The EKM endpoint: TLS 1.3 + mutual TLS terminates in the app. Managed HSM needs it on host port 443 (override only for local tests).
+      - "${EKMMOCK_EKM_PORT:-443}:8443"
+      # The console: host LOOPBACK ONLY. Do not change the left-hand side.
+      - "127.0.0.1:${EKMMOCK_CONSOLE_PORT:-8080}:8080"
+    volumes:
+      - ekmmock-data:/data
+    secrets:
+      - ekmmock_master_key
+    environment:
+      # Secrets come from files, never from literals in this file.
+      EKMMOCK_MASTER_KEY_FILE: /run/secrets/ekmmock_master_key
+      Tls__CertFile: /data/tls/server.crt
+      Tls__KeyFile: /data/tls/server.key
+      # The console listens on all container interfaces so that the published port works; the explicit opt-in below is accepted only inside a container, only with
+      # Console:Auth=LoopbackOnly, and makes the console refuse requests from public source addresses and show a warning banner.
+      Endpoints__Console__Url: https://0.0.0.0:8080
+      EKMMOCK_CONSOLE_CONTAINER_PUBLISH: "true"
+      # Switches for test scenarios (spec 10.2, 6.2). Off unless you ask for them, for example:  EKMMOCK_ENABLE_FAULTS=true docker compose up -d
+      EKMMOCK_ENABLE_FAULTS: ${EKMMOCK_ENABLE_FAULTS:-false}
+      EKMMOCK_ALLOW_KEY_IMPORT: "false"
+    # The image's HEALTHCHECK (ekmmock health: /healthz on the console port) applies.
+
+secrets:
+  ekmmock_master_key:
+    file: ./secrets/ekmmock_master_key
+
+volumes:
+  ekmmock-data:

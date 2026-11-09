@@ -113,9 +113,11 @@ internal sealed class FakeStatus : IConsoleStatusProvider
 
     public bool RevealAllowed { get; set; }
 
+    public bool ContainerPublish { get; set; }
+
     public bool Ready { get; set; } = true;
 
-    public ConsoleStatus Get() => new("0.0.0-test", "LoopbackOnly", DevMasterKey, DevMasterKey, Ready, true, false, RevealAllowed, RevealAllowed ? "Reveal" : "Masked", 250, 150);
+    public ConsoleStatus Get() => new("0.0.0-test", "LoopbackOnly", DevMasterKey, DevMasterKey, Ready, true, false, RevealAllowed, RevealAllowed ? "Reveal" : "Masked", 250, 150, ContainerPublish: ContainerPublish);
 
     public ReadinessResult CheckReadiness() => new(Ready, Ready ? [] : ["key_store"]);
 }

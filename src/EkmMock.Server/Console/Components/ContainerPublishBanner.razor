@@ -1,0 +1,10 @@
+@inject IConsoleStatusProvider Status
+
+@* Open question 33 / DECISIONS "M9: Container-safe console binding": the LoopbackOnly console is bound to a non-loopback address because it runs inside a container. Nothing here is
+   authenticated, so the only protection is that the host publishes the port on 127.0.0.1. Shown on every page while the opt-in is active. Warning intent: amber with an icon and a title (never colour alone). *@
+@if (Status.Get().ContainerPublish)
+{
+    <ConsoleAlert Intent="AlertIntent.Warning" Title="@ConsoleContainerPublish.BannerTitle" DataRole="container-publish-banner" Class="console-banner banner-container-publish">
+        @ConsoleContainerPublish.BannerText
+    </ConsoleAlert>
+}

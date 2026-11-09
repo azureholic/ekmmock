@@ -37,6 +37,21 @@ public sealed class ShellTests : ConsoleTestBase
     }
 
     [Fact]
+    public void TheContainerPublishBanner_IsShown_OnlyWhileTheOptInIsActive_OnEveryPage_AndSaysWhatToDo()
+    {
+        Render<ContainerPublishBanner>().FindAll("[data-role='container-publish-banner']").ShouldBeEmpty();
+
+        StatusFake.ContainerPublish = true;
+        var banner = Render<ContainerPublishBanner>().Find("[data-role='container-publish-banner']");
+
+        banner.GetAttribute("role").ShouldBe("alert");
+        Text(banner).ShouldContain("Console bound inside a container");
+        Text(banner).ShouldContain("host publish must be loopback-only");
+        Text(banner).ShouldContain("127.0.0.1:8080:8080");
+        Layout().Find("[data-role='main'] [data-role='container-publish-banner']").ShouldNotBeNull();
+    }
+
+    [Fact]
     public void TheDevModeBanner_IsOnEveryPage_BecauseItLivesInTheLayout()
     {
         StatusFake.DevMasterKey = true;

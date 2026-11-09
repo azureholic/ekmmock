@@ -53,6 +53,7 @@ a { color: var(--accent-foreground-rest, #0f6cbd); }
 .console-banner fluent-messagebar, .console-banner .fluent-messagebar { max-width: 100%; box-sizing: border-box; }
 .banner-dev { border-left: 6px solid var(--ekm-error); }
 .banner-faults { border-left: 6px solid var(--ekm-warning); }
+.banner-container-publish { border-left: 6px solid var(--ekm-warning); }
 .banner-link { margin-left: 0.5rem; }
 
 .console-error { border: 1px solid var(--ekm-error); border-radius: 4px; padding: 0.75rem 1rem; margin: 0.5rem 0; }

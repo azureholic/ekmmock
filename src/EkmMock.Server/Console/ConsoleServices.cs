@@ -83,7 +83,8 @@ internal sealed record ConsoleStatus(
     int LatencyBudgetMs,
     int LatencyWarningMs,
     bool FaultsEnabled = false,
-    bool HsmOfflineFault = false);
+    bool HsmOfflineFault = false,
+    bool ContainerPublish = false);
 
 /// <summary>The answer of <c>/readyz</c>: ready, or the short names of what is not (never details).</summary>
 internal sealed record ReadinessResult(bool Ready, IReadOnlyList<string> NotReady);
@@ -114,6 +115,7 @@ internal sealed class ConsoleStatusProvider : IConsoleStatusProvider
     private readonly IHostApplicationLifetime _lifetime;
     private readonly ListenerRegistry _listeners;
     private readonly IServerCertificateProvider _certificates;
+    private readonly ConsoleExposure _exposure;
 
     public ConsoleStatusProvider(
         EkmStartupState startup,
@@ -125,8 +127,10 @@ internal sealed class ConsoleStatusProvider : IConsoleStatusProvider
         IInspectorQuery inspector,
         IHostApplicationLifetime lifetime,
         ListenerRegistry listeners,
-        IServerCertificateProvider certificates)
+        IServerCertificateProvider certificates,
+        ConsoleExposure exposure)
     {
+        _exposure = exposure;
         _startup = startup;
         _backend = backend;
         _dev = dev;
@@ -155,7 +159,8 @@ internal sealed class ConsoleStatusProvider : IConsoleStatusProvider
             _limits.Value.LatencyBudgetMs,
             _limits.Value.LatencyWarningMs,
             _faults.Enabled,
-            _faults.HsmOffline);
+            _faults.HsmOffline,
+            _exposure.ContainerPublishActive);
     }
 
     public ReadinessResult CheckReadiness()

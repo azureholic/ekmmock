@@ -27,9 +27,26 @@ internal static class ConsoleConfigurationValidator
         ConsoleEndpointOptions endpoint,
         string? ekmUrl = null,
         Func<string, string?>? environment = null,
-        Func<string, IReadOnlyList<IPAddress>>? resolve = null)
+        Func<string, IReadOnlyList<IPAddress>>? resolve = null,
+        IContainerProbe? container = null)
     {
         var problems = new List<string>();
+
+        // The container-publish opt-in (open question 33): only for LoopbackOnly, and only in a container. Anything else is refused outright instead of being silently ignored,
+        // so a copied environment variable cannot give a false sense of safety.
+        var containerPublish = ConsoleContainerPublish.IsRequested(environment);
+        var containerPublishAllowed = containerPublish && options.Auth == ConsoleAuthMode.LoopbackOnly && (container ?? new SystemContainerProbe()).IsRunningInContainer;
+        if (containerPublish && options.Auth == ConsoleAuthMode.EntraId)
+        {
+            problems.Add(
+                $"{ConsoleContainerPublish.Variable}=true only applies to Console:Auth=LoopbackOnly. With EntraId the console may bind any address and the sign-in is the access control: unset the variable.");
+        }
+        else if (containerPublish && !containerPublishAllowed)
+        {
+            problems.Add(
+                $"{ConsoleContainerPublish.Variable}=true is accepted only when the process runs in a Linux container (DOTNET_RUNNING_IN_CONTAINER=true and a container marker such as /.dockerenv). " +
+                "Outside a container the console must bind a loopback address; unset the variable.");
+        }
 
         ConsoleEndpointAddress? address = null;
         try
@@ -43,7 +60,7 @@ internal static class ConsoleConfigurationValidator
 
         if (address is not null)
         {
-            if (options.Auth == ConsoleAuthMode.LoopbackOnly && address.Kind != ConsoleBindKind.Loopback)
+            if (options.Auth == ConsoleAuthMode.LoopbackOnly && address.Kind != ConsoleBindKind.Loopback && !containerPublishAllowed)
             {
                 problems.Add(
                     $"Console:Auth=LoopbackOnly requires the console to bind to a loopback address (127.0.0.1, ::1 or localhost), but Endpoints:Console:Url binds '{address.Host}' ({Describe(address.Kind)}). " +
@@ -85,9 +102,9 @@ internal static class ConsoleConfigurationValidator
     }
 
     /// <summary>Throws <see cref="StartupConfigurationException"/> when <see cref="Validate"/> finds a problem.</summary>
-    public static void EnsureValid(ConsoleOptions options, ConsoleEndpointOptions endpoint, string? ekmUrl = null)
+    public static void EnsureValid(ConsoleOptions options, ConsoleEndpointOptions endpoint, string? ekmUrl = null, IContainerProbe? container = null)
     {
-        var problems = Validate(options, endpoint, ekmUrl);
+        var problems = Validate(options, endpoint, ekmUrl, container: container);
         if (problems.Count > 0)
         {
             throw new StartupConfigurationException(problems);
@@ -157,16 +174,18 @@ internal sealed class ConsoleOptionsValidator : IValidateOptions<ConsoleOptions>
 {
     private readonly IOptions<ConsoleEndpointOptions> _endpoint;
     private readonly IOptions<EkmEndpointOptions> _ekm;
+    private readonly IContainerProbe _container;
 
-    public ConsoleOptionsValidator(IOptions<ConsoleEndpointOptions> endpoint, IOptions<EkmEndpointOptions> ekm)
+    public ConsoleOptionsValidator(IOptions<ConsoleEndpointOptions> endpoint, IOptions<EkmEndpointOptions> ekm, IContainerProbe container)
     {
         _endpoint = endpoint;
         _ekm = ekm;
+        _container = container;
     }
 
     public ValidateOptionsResult Validate(string? name, ConsoleOptions options)
     {
-        var problems = ConsoleConfigurationValidator.Validate(options, _endpoint.Value, _ekm.Value.Url);
+        var problems = ConsoleConfigurationValidator.Validate(options, _endpoint.Value, _ekm.Value.Url, container: _container);
         return problems.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(problems);
     }
 }

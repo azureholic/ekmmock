@@ -1,0 +1,109 @@
+# EkmMock for a laptop try-out (spec 11.2): `docker compose -f deploy/docker/compose.dev.yaml up -d --build --wait`, then run the conformance suite.
+#
+# What this does, with no manual steps:
+#   dev-init  (one-shot)  creates a master key and a TEST PKI inside the data volume: a test root CA, a server certificate (localhost, ekmmock, 127.0.0.1, ::1), a fake
+#                         "Managed HSM" client CA and client certificate with CN test.managedhsmclient.local, plus the wrong-CN / untrusted-CA clients and a replacement
+#                         server certificate that the conformance suite uses. Files are in /data/dev-pki.
+#   ekmmock               the server with --dev: sample keys aes-key-1 (AES-256) and rsa-key-1 (RSA-2048) in the _default namespace, and the console test client trusted.
+#                         Key import and fault injection are switched on (dev only) so the conformance suite skips as little as possible.
+#   dev-seed  (one-shot)  trusts the fake Managed HSM client CA (and its CN) in _default through the console API.
+#
+# Run the suite from inside the container: no host ports, certificates or tools needed beyond Docker.
+#   docker compose -f deploy/docker/compose.dev.yaml exec ekmmock ekmmock test conformance \
+#       --url https://localhost:8443 --client-cert /data/dev-pki/client.crt --client-key /data/dev-pki/client.key --ca /data/dev-pki/root-ca.pem \
+#       --alt-client-cert /data/dev-pki/client-wrong-cn.crt --alt-client-key /data/dev-pki/client-wrong-cn.key \
+#       --rogue-client-cert /data/dev-pki/client-untrusted-ca.crt --rogue-client-key /data/dev-pki/client-untrusted-ca.key \
+#       --replacement-server-cert /data/dev-pki/server-replacement.crt --replacement-server-key /data/dev-pki/server-replacement.key \
+#       --console https://127.0.0.1:8080 --console-ca /data/dev-pki/root-ca.pem --allow-disruptive --report /data/reports/conformance-report.json
+# (scripts/dev.ps1 conformance and `make conformance` run exactly that.) To use the certificates from the host:
+#   docker compose -f deploy/docker/compose.dev.yaml cp ekmmock:/data/dev-pki ./out/dev-certs
+#
+# THIS IS NOT FOR SHARED OR LONG-LIVED USE: the master key sits next to the key store it protects, the PKI is a throw-away test PKI, and the console is unauthenticated.
+# The console port is published on the host's loopback only (127.0.0.1): never change that to 8080:8080 or 0.0.0.0:8080:8080.
+
+name: ekmmock-dev
+
+x-image: &image
+  image: ${EKMMOCK_IMAGE:-ekmmock:local}
+  build:
+    context: ../..
+    dockerfile: deploy/docker/Dockerfile
+    args:
+      NUGET_SOURCE: ${NUGET_SOURCE:-}
+
+x-hardening: &hardening
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  dev-init:
+    <<: [*image, *hardening]
+    container_name: ekmmock-dev-init
+    restart: "no"
+    volumes:
+      - ekmmock-dev-data:/data
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        ekmmock init --data /data --master-key-file /data/master.key
+        if [ ! -f /data/dev-pki/root-ca.pem ]; then ekmmock certs dev --out /data/dev-pki --fqdn ekmmock; fi
+        mkdir -p /data/tls /data/reports
+        # The server persists an uploaded certificate over its own files, so it gets copies: the originals stay what 'certs dev' wrote.
+        cp /data/dev-pki/server.crt /data/tls/server.crt
+        cp /data/dev-pki/server.key /data/tls/server.key
+        chmod 600 /data/tls/server.key
+    healthcheck:
+      disable: true
+
+  ekmmock:
+    <<: [*image, *hardening]
+    container_name: ekmmock-dev
+    restart: unless-stopped
+    command: ["--dev"]
+    depends_on:
+      dev-init:
+        condition: service_completed_successfully
+    ports:
+      - "${EKMMOCK_EKM_PORT:-443}:8443"
+      # Host loopback only. Do not change the left-hand side.
+      - "127.0.0.1:${EKMMOCK_CONSOLE_PORT:-8080}:8080"
+    volumes:
+      - ekmmock-dev-data:/data
+    environment:
+      EKMMOCK_MASTER_KEY_FILE: /data/master.key
+      Tls__CertFile: /data/tls/server.crt
+      Tls__KeyFile: /data/tls/server.key
+      Endpoints__Console__Url: https://0.0.0.0:8080
+      EKMMOCK_CONSOLE_CONTAINER_PUBLISH: "true"
+      # The one-shot dev-seed container reaches the console under this name (the console checks the Host header: DNS-rebinding defence).
+      Console__AllowedHosts__0: ekmmock
+      Dev__SeedSampleKeys: "true"
+      EKMMOCK_ALLOW_KEY_IMPORT: "true"
+      EKMMOCK_ENABLE_FAULTS: "true"
+
+  dev-seed:
+    <<: [*image, *hardening]
+    container_name: ekmmock-dev-seed
+    restart: "no"
+    depends_on:
+      ekmmock:
+        condition: service_healthy
+    volumes:
+      - ekmmock-dev-data:/data:ro
+    environment:
+      EKMMOCK_CONSOLE: https://ekmmock:8080
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        ekmmock health --ready --console-ca /data/dev-pki/root-ca.pem --timeout 10s
+        ekmmock trust import --ns _default --json /data/dev-pki/mhsm-client.json --console-ca /data/dev-pki/root-ca.pem
+    healthcheck:
+      disable: true
+
+volumes:
+  ekmmock-dev-data:

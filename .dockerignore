@@ -1,0 +1,26 @@
+# Allow-list build context for deploy/docker/Dockerfile: only what the image build reads goes to the Docker daemon.
+# Everything else (the .git folder, tests, docs, benchmarks, TestResults, local data, keys, certificates, .env files) stays out, so a secret
+# in the working directory can never reach a layer or a remote builder.
+*
+
+!global.json
+!Directory.Build.props
+!Directory.Packages.props
+!src/**
+
+# Inside the allowed folders: no build output, no local settings, no key material, no data.
+**/bin
+**/obj
+**/appsettings.Development.json
+**/secrets.json
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/*.pfx
+**/*.p12
+**/keystore.json
+**/namespaces.json
+**/master.key
+**/*.jsonl
+**/*.log

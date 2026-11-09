@@ -20,6 +20,12 @@ internal static class ConsoleServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<ConsoleOptions>, ConsoleOptionsValidator>());
         services.AddOptions<ConsoleEndpointOptions>().BindConfiguration(ConsoleEndpointOptions.SectionName);
 
+        services.TryAddSingleton<IContainerProbe, SystemContainerProbe>();
+        services.TryAddSingleton(static sp => ConsoleExposure.Resolve(
+            sp.GetRequiredService<IOptions<ConsoleOptions>>().Value,
+            sp.GetRequiredService<IOptions<ConsoleEndpointOptions>>().Value,
+            sp.GetRequiredService<IContainerProbe>(),
+            sp.GetRequiredService<ILoggerFactory>().CreateLogger("EkmMock.Console")));
         services.TryAddSingleton<ListenerRegistry>();
         services.TryAddSingleton<ConsoleListenerPorts>();
         services.TryAddSingleton<IConsolePortPolicy>(static sp => sp.GetRequiredService<ConsoleListenerPorts>());
@@ -72,7 +78,9 @@ internal static class ConsoleServiceCollectionExtensions
         var endpoint = builder.Configuration.GetSection(ConsoleEndpointOptions.SectionName).Get<ConsoleEndpointOptions>() ?? new ConsoleEndpointOptions();
         var ekmUrl = builder.Configuration.GetSection(EkmEndpointOptions.SectionName).Get<EkmEndpointOptions>()?.Url ?? new EkmEndpointOptions().Url;
 
-        ConsoleConfigurationValidator.EnsureValid(options, endpoint, ekmUrl);
+        // A test seam: a test registers its own IContainerProbe instance before the host is built (the customize hook of BuildEkmMockApp); production has none and uses the real probe.
+        var probe = builder.Services.LastOrDefault(static d => d.ServiceType == typeof(IContainerProbe) && d.ImplementationInstance is not null)?.ImplementationInstance as IContainerProbe;
+        ConsoleConfigurationValidator.EnsureValid(options, endpoint, ekmUrl, probe);
 
         builder.Services.AddConsoleAuthentication(options);
         builder.Services.AddOptions<Microsoft.AspNetCore.Components.Server.CircuitOptions>()
@@ -91,15 +99,24 @@ internal static class ConsoleServiceCollectionExtensions
             var folder = Path.Combine(Path.GetFullPath(sp.GetRequiredService<IOptions<DataOptions>>().Value.Path), "dataprotection");
             return new ConfigureOptions<KeyManagementOptions>(management =>
             {
+                // The keys live on the data volume (open tokens survive a restart). Without a writable volume they stay in memory, deliberately, so the console still works.
                 try
                 {
                     Directory.CreateDirectory(folder);
-                    management.XmlRepository = new Microsoft.AspNetCore.DataProtection.Repositories.FileSystemXmlRepository(new DirectoryInfo(folder), sp.GetRequiredService<ILoggerFactory>());
+                    var directory = new DirectoryInfo(folder);
+                    if (DataFolderXmlRepository.IsWritable(directory))
+                    {
+                        management.XmlRepository = new DataFolderXmlRepository(directory);
+                        return;
+                    }
                 }
                 catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
                 {
-                    logger.LogWarning("The data protection key folder is not writable; console tokens use in-memory keys and are invalid after a restart.");
+                    // fall through to the in-memory keys
                 }
+
+                management.XmlRepository = new InMemoryXmlRepository();
+                logger.LogWarning("The data protection key folder is not writable; console tokens use in-memory keys and are invalid after a restart.");
             });
         });
         return services;

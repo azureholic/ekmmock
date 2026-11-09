@@ -1,0 +1,257 @@
+# EkmMock CI (spec 13 "GitHub Actions CI"): build with warnings as errors, run the tests, scan the packages, build the image and run the conformance suite against the container.
+#
+# Hardening (see .github/skills/github-actions-hardening): no pull_request_target / workflow_run, read-only GITHUB_TOKEN, every action pinned to a full commit SHA (Dependabot keeps
+# them current), checkout without persisted credentials, no ${{ }} expression inside a run: script, no secrets, timeouts and a concurrency group on every job.
+#
+# Test selection: the real-browser tests (trait Category=Browser, Playwright + Chromium) run in their own job so that the main jobs never depend on a browser download. The
+# Linux job runs the cipher-suite tests that are skipped on Windows (CipherSuitesPolicy needs OpenSSL); the Windows job runs the Windows-specific tests (CNG key containers).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: "1"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "1"
+  DOTNET_GENERATE_ASPNET_CERTIFICATE: "false"
+
+jobs:
+  build-test:
+    name: Build, test and package scan (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          # The latest 10.0 SDK: the tests need the 10.0.14+ shared framework that Microsoft.AspNetCore.Mvc.Testing matches (global.json only sets a floor).
+          dotnet-version: 10.0.x
+
+      - name: Cache NuGet packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('Directory.Packages.props', 'global.json') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
+
+      - name: Build (warnings are errors)
+        run: dotnet build EkmMock.sln --configuration Release -warnaserror
+
+      - name: Test
+        run: >
+          dotnet test --solution EkmMock.sln --configuration Release --no-build
+          --filter-not-trait "Category=Browser"
+          --report-xunit-trx --results-directory TestResults/linux
+
+      - name: Scan packages for known vulnerabilities
+        run: |
+          set -uo pipefail
+          # `dotnet list package --vulnerable` exits 0 even when it finds something, so the output is checked. An unreachable advisory source is a failure too:
+          # a scan that could not run must not pass.
+          dotnet list EkmMock.sln package --vulnerable --include-transitive 2>&1 | tee vulnerable-packages.txt
+          if grep -q "has the following vulnerable packages" vulnerable-packages.txt; then
+            echo "::error::Vulnerable packages found (see the step output)."
+            exit 1
+          fi
+          if grep -qiE "unable to load the service index|error NU1301|error NU1900" vulnerable-packages.txt; then
+            echo "::error::The vulnerability scan could not reach its advisory source."
+            exit 1
+          fi
+
+      - name: Upload test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-results-linux
+          path: |
+            TestResults/linux/**/*.trx
+            vulnerable-packages.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+  # Windows is where the product is developed and where the CNG key-container tests apply. It runs the same solution; it is a separate job so that a Windows-only
+  # problem never hides the Linux result.
+  build-test-windows:
+    name: Build and test (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Cache NuGet packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('Directory.Packages.props', 'global.json') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
+
+      - name: Build (warnings are errors)
+        run: dotnet build EkmMock.sln --configuration Release -warnaserror
+
+      - name: Test
+        run: >
+          dotnet test --solution EkmMock.sln --configuration Release --no-build
+          --filter-not-trait "Category=Browser"
+          --report-xunit-trx --results-directory TestResults/windows
+
+      - name: Upload test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-results-windows
+          path: TestResults/windows/**/*.trx
+          if-no-files-found: warn
+          retention-days: 14
+
+  # The real-browser tests of the console (Playwright + Chromium). Chromium and its system libraries are installed here, so the other jobs stay independent of a browser download.
+  browser-tests:
+    name: Console browser tests (Chromium)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Cache NuGet packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('Directory.Packages.props', 'global.json') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
+
+      - name: Build the console tests
+        run: dotnet build tests/EkmMock.Console.Tests/EkmMock.Console.Tests.csproj --configuration Release -warnaserror
+
+      - name: Install Chromium and its system libraries
+        run: pwsh tests/EkmMock.Console.Tests/bin/Release/net10.0/playwright.ps1 install --with-deps chromium
+
+      - name: Run the browser tests
+        run: >
+          dotnet test --project tests/EkmMock.Console.Tests --configuration Release --no-build
+          --filter-trait "Category=Browser"
+          --report-xunit-trx --results-directory TestResults/browser
+
+      - name: Upload test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-results-browser
+          path: TestResults/browser/**/*.trx
+          if-no-files-found: warn
+          retention-days: 14
+
+  # Spec 13 M9: the image is built from deploy/docker/Dockerfile (the standard clean-network path, nuget.org) and the conformance suite runs against the container.
+  image-conformance:
+    name: Image build and conformance suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      # The runner has nothing on these ports; 8443 avoids binding a privileged host port for no reason.
+      EKMMOCK_EKM_PORT: "8443"
+      EKMMOCK_CONSOLE_PORT: "8080"
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the image and start the dev stack
+        run: docker compose -f deploy/docker/compose.dev.yaml up -d --build --wait
+
+      - name: Check the container hardening
+        run: |
+          set -euo pipefail
+          compose="docker compose -f deploy/docker/compose.dev.yaml"
+          test "$($compose exec -T ekmmock id -u)" = "1654"
+          if $compose exec -T ekmmock sh -c 'touch /app/not-writable' 2>/dev/null; then echo "::error::the root file system is writable"; exit 1; fi
+          $compose exec -T ekmmock sh -c 'touch /data/writable && rm /data/writable'
+          docker inspect -f '{{.HostConfig.ReadonlyRootfs}} {{.HostConfig.CapDrop}} {{.HostConfig.SecurityOpt}}' ekmmock-dev | tee hardening.txt
+          grep -q "^true \[ALL\] \[no-new-privileges:true\]$" hardening.txt
+          $compose exec -T ekmmock ekmmock health --insecure-console-cert
+
+      - name: Conformance suite against the container
+        run: make conformance
+
+      - name: Restart test (the two-phase persistence check, spec 14 test 13)
+        run: |
+          set -euo pipefail
+          compose="docker compose -f deploy/docker/compose.dev.yaml"
+          run_phase() {
+            $compose exec -T ekmmock ekmmock test conformance \
+              --url https://localhost:8443 --client-cert /data/dev-pki/client.crt --client-key /data/dev-pki/client.key --ca /data/dev-pki/root-ca.pem \
+              --console https://127.0.0.1:8080 --console-ca /data/dev-pki/root-ca.pem \
+              --only 14.13 --persistence-state /data/reports/persistence-state.json --report "/data/reports/$1.json"
+          }
+          run_phase phase1
+          $compose restart ekmmock
+          for _ in $(seq 1 60); do
+            if $compose exec -T ekmmock ekmmock health --ready --insecure-console-cert >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          run_phase phase2 | tee phase2.txt
+          grep -q "^PASS  14.13.a" phase2.txt
+
+      - name: Collect the reports
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p out
+          docker compose -f deploy/docker/compose.dev.yaml cp ekmmock:/data/reports out/reports || true
+          docker compose -f deploy/docker/compose.dev.yaml logs --no-color > out/compose.log 2>&1 || true
+
+      - name: Upload the conformance reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: conformance-reports
+          path: |
+            out/conformance-report.json
+            out/reports/*.json
+            out/compose.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Stop the stack and delete its volume
+        if: ${{ always() }}
+        run: docker compose -f deploy/docker/compose.dev.yaml down -v

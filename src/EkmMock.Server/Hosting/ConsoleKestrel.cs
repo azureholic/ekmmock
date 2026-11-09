@@ -61,6 +61,7 @@ internal sealed class ConsoleKestrelSetup : IConfigureOptions<KestrelServerOptio
     private readonly ConsoleCertificates _certificates;
     private readonly ConsoleListenerPorts _ports;
     private readonly ListenerRegistry _listeners;
+    private readonly IContainerProbe _container;
 
     public ConsoleKestrelSetup(
         IOptions<ConsoleEndpointOptions> endpoint,
@@ -68,8 +69,10 @@ internal sealed class ConsoleKestrelSetup : IConfigureOptions<KestrelServerOptio
         IOptions<EkmEndpointOptions> ekm,
         ConsoleCertificates certificates,
         ConsoleListenerPorts ports,
-        ListenerRegistry listeners)
+        ListenerRegistry listeners,
+        IContainerProbe container)
     {
+        _container = container;
         _endpoint = endpoint.Value;
         _console = console.Value;
         _ekm = ekm.Value;
@@ -80,7 +83,7 @@ internal sealed class ConsoleKestrelSetup : IConfigureOptions<KestrelServerOptio
 
     public void Configure(KestrelServerOptions options)
     {
-        ConsoleConfigurationValidator.EnsureValid(_console, _endpoint, _ekm.Url);
+        ConsoleConfigurationValidator.EnsureValid(_console, _endpoint, _ekm.Url, _container);
         var address = ConsoleEndpointAddress.Parse(_endpoint.Url);
 
         void ConfigureListener(ListenOptions listen)

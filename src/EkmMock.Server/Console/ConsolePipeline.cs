@@ -91,11 +91,13 @@ internal sealed class ConsoleRequestGuardMiddleware
 {
     private readonly RequestDelegate _next;
     private readonly ConsoleOptions _options;
+    private readonly ConsoleExposure _exposure;
 
-    public ConsoleRequestGuardMiddleware(RequestDelegate next, IOptions<ConsoleOptions> options)
+    public ConsoleRequestGuardMiddleware(RequestDelegate next, IOptions<ConsoleOptions> options, ConsoleExposure? exposure = null)
     {
         _next = next;
         _options = options.Value;
+        _exposure = exposure ?? ConsoleExposure.None;
     }
 
     public async Task InvokeAsync(HttpContext context)
@@ -117,7 +119,17 @@ internal sealed class ConsoleRequestGuardMiddleware
         if (_options.Auth == ConsoleAuthMode.LoopbackOnly)
         {
             // A null address is the in-process test host, which has no socket.
-            if (_options.EnforceLoopbackClient && context.Connection.RemoteIpAddress is { } remote && !ConsoleEndpointAddress.IsLoopback(remote))
+            if (_exposure.ContainerPublishActive)
+            {
+                // The container-publish opt-in (open question 33): the listener is not loopback-only, so the source address is the only runtime check. It always applies (EnforceLoopbackClient does not
+                // turn it off): only loopback and private/link-local sources (the container bridge) are served. With a loopback-restricted host publish Docker presents the bridge gateway here, so
+                // this is defence in depth against a mistaken 0.0.0.0 publish reached from outside the private ranges; the primary control is the host-side 127.0.0.1 publish.
+                if (context.Connection.RemoteIpAddress is { } source && !ConsoleContainerPublish.IsContainerNetworkSource(source))
+                {
+                    return "The console accepts connections from the local container network only.";
+                }
+            }
+            else if (_options.EnforceLoopbackClient && context.Connection.RemoteIpAddress is { } remote && !ConsoleEndpointAddress.IsLoopback(remote))
             {
                 return "The console accepts local connections only.";
             }
@@ -164,6 +176,8 @@ internal static class ConsolePipeline
         var ports = app.ApplicationServices.GetRequiredService<IConsolePortPolicy>();
         var auth = app.ApplicationServices.GetRequiredService<IOptions<ConsoleOptions>>().Value.Auth;
 
+        // Resolved now so that the container-publish warning (if the opt-in is active) is logged at start-up, before the first request.
+        app.ApplicationServices.GetRequiredService<ConsoleExposure>();
         // WebApplication adds UseAuthentication/UseAuthorization to the TOP of the pipeline by itself when the authentication services are registered and the top-level builder has not
         // called them (calls inside a UseWhen branch do not count). That would run the console's fallback policy for EKM requests too: an EntraId console would answer the EKM endpoint
         // with 401 and a LoopbackOnly one would run the loopback handler on every wrap/unwrap. The console branch below has its own UseAuthentication/UseAuthorization, so declare both
