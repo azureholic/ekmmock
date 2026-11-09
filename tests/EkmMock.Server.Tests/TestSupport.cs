@@ -5,8 +5,11 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using EkmMock.Crypto;
+using EkmMock.Server.Connections;
+using EkmMock.Server.Ekm;
 using EkmMock.Server.Hosting;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
@@ -135,6 +138,12 @@ internal sealed class EkmFactory : WebApplicationFactory<Program>
                 services.AddSingleton(availability);
             }
 
+            // The in-process test host has no TLS and no client certificates, so the M2 handler tests replace the two transport-level
+            // seams here, in the test host's own DI. Production has no such switch (see ArchitectureTests): the real listener always
+            // runs the mTLS authorizer, and EKM routes answer only on the EKM listener ports.
+            services.AddSingleton<IEkmCallerAuthorizer, AllowAllCallerAuthorizer>();
+            services.AddSingleton<IEkmPortPolicy, AnyPortPolicy>();
+
             _options.ConfigureServices?.Invoke(services);
         });
     }
@@ -154,6 +163,18 @@ internal sealed class FixedAvailability : IEngineAvailability
     public FixedAvailability(bool available) => IsAvailable = available;
 
     public bool IsAvailable { get; set; }
+}
+
+/// <summary>Test host only: the in-process server has no client certificates, so every caller is "authorized" there.</summary>
+internal sealed class AllowAllCallerAuthorizer : IEkmCallerAuthorizer
+{
+    public EkmAuthResult Authorize(HttpContext context, NamespaceDefinition ns) => EkmAuthResult.Allowed();
+}
+
+/// <summary>Test host only: the in-process server has no listener ports, so every request counts as an EKM request.</summary>
+internal sealed class AnyPortPolicy : IEkmPortPolicy
+{
+    public bool IsEkmPort(int localPort) => true;
 }
 
 /// <summary>One captured log record: the formatted message, the structured state and any exception, all as text for leak scans.</summary>
@@ -294,6 +315,9 @@ internal sealed class EkmClient
 
     public EkmClient(HttpClient http) => _http = http;
 
+    /// <summary>The HTTP version to request (<see cref="HttpVersionPolicy.RequestVersionOrLower"/>); null keeps the default of 1.1.</summary>
+    public Version? RequestVersion { get; init; }
+
     public HttpClient Http => _http;
 
     public static string Path(string? prefix, string? key, string op, string? query = "api-version=0.1-preview")
@@ -316,6 +340,11 @@ internal sealed class EkmClient
     public async Task<EkmReply> SendAsync(HttpMethod method, string path, HttpContent? content = null)
     {
         var message = new HttpRequestMessage(method, path) { Content = content };
+        if (RequestVersion is not null)
+        {
+            message.Version = RequestVersion;
+            message.VersionPolicy = HttpVersionPolicy.RequestVersionOrLower;
+        }
         var response = await _http.SendAsync(message);
         var body = await response.Content.ReadAsByteArrayAsync();
         return new EkmReply(response.StatusCode, response.Content.Headers.ContentType?.ToString(), body, response);

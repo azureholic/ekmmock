@@ -17,6 +17,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\EkmMock.Server\EkmMock.Server.csproj" />
+    <ProjectReference Include="..\..\src\EkmMock.Pki\EkmMock.Pki.csproj" />
+    <ProjectReference Include="..\EkmMock.TestSupport\EkmMock.TestSupport.csproj" />
   </ItemGroup>
 
   <ItemGroup>

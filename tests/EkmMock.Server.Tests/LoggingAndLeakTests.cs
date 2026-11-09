@@ -11,7 +11,7 @@ public sealed class LoggingAndLeakTests
     private static readonly string[] AllowedLogFields =
     [
         "exchange_id", "request_id", "correlation_id", "pool_name", "namespace", "op", "key", "alg",
-        "status", "error_code", "duration_ms", "crypto_ms", "exception_type",
+        "status", "error_code", "duration_ms", "crypto_ms", "client_cn", "auth_failure", "exception_type",
     ];
 
     private static IEnumerable<CapturedLog> RequestLines(EkmFactory factory)

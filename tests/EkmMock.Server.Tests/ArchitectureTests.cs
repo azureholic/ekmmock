@@ -1,9 +1,11 @@
 using System.Reflection;
 using System.Text.Json;
 using EkmMock.Crypto;
+using EkmMock.Server.Connections;
 using EkmMock.Server.Ekm;
 using EkmMock.Server.Hosting;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Options;
@@ -13,6 +15,15 @@ namespace EkmMock.Server.Tests;
 /// <summary>Layering and composition rules of M2 (spec 5.4, 7, 16 and the repository rules).</summary>
 public sealed class ArchitectureTests
 {
+    // Builds the production composition on the in-process test server: constructing the real Kestrel server would (correctly) demand a TLS certificate.
+    private static WebApplication BuildApp(string[] args)
+    {
+        var builder = WebApplication.CreateBuilder(args);
+        builder.AddEkmMockServer(args);
+        builder.WebHost.UseTestServer();
+        return builder.Build();
+    }
+
     [Fact]
     public void Crypto_StillHasNoAspNetCoreOrHostingReference()
     {
@@ -24,31 +35,62 @@ public sealed class ArchitectureTests
     }
 
     [Fact]
-    public void Server_HasNoKestrelOrTlsDependencyInM2()
+    public void Server_ConfiguresListenersAndTlsOnlyInTheEkmEndpointSetup()
     {
-        // TLS 1.3 + mTLS + the real listeners are M3. Nothing in the M2 server code touches them.
-        var references = typeof(Program).Assembly.GetReferencedAssemblies().Select(static a => a.Name!).ToList();
-
-        references.ShouldNotContain(n => n.StartsWith("Microsoft.AspNetCore.Server.Kestrel", StringComparison.Ordinal));
-        references.ShouldNotContain("System.Net.Security");
-        references.ShouldNotContain("System.Security.Cryptography.X509Certificates");
-    }
-
-    [Fact]
-    public void Server_SourceDoesNotConfigureKestrelOrTls()
-    {
-        var forbidden = new[] { "ConfigureKestrel(", "UseKestrel(", "UseHttps(", "ListenAnyIP(", "ListenLocalhost(", "SslProtocols", "ClientCertificateMode" };
+        // M3: listeners, UseHttps and client certificate mode live in EkmKestrel.cs only; the cipher policy in TlsPolicy.cs/EkmKestrel.cs.
+        var listenerTokens = new[] { "ConfigureKestrel(", "UseKestrel(", "UseHttps(", "ListenAnyIP(", "ListenLocalhost(", "ClientCertificateMode" };
         var sources = Directory.EnumerateFiles(RepoPaths.Src("EkmMock.Server"), "*.cs", SearchOption.AllDirectories)
-            .Where(static f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"));
+            .Where(static f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"))
+            .ToList();
 
-        foreach (var file in sources)
+        foreach (var file in sources.Where(static f => Path.GetFileName(f) != "EkmKestrel.cs"))
         {
             var text = File.ReadAllText(file);
-            foreach (var token in forbidden)
+            foreach (var token in listenerTokens)
             {
                 text.Contains(token, StringComparison.Ordinal).ShouldBeFalse($"{Path.GetFileName(file)} contains {token}");
             }
         }
+
+        foreach (var file in sources.Where(static f => Path.GetFileName(f) is not ("EkmKestrel.cs" or "TlsPolicy.cs")))
+        {
+            File.ReadAllText(file).Contains("CipherSuitesPolicy", StringComparison.Ordinal).ShouldBeFalse(Path.GetFileName(file));
+        }
+    }
+
+    [Fact]
+    public void Server_HasNoPlainHttpEkmPath_AndNoAuthorizationBypassInProductionCode()
+    {
+        // The only things a test host may replace are the DI seams; the production assembly must not contain an allow-all
+        // authorizer, a "disable auth/TLS" option, or a plain-HTTP listener for the EKM endpoint.
+        var types = typeof(Program).Assembly.GetTypes();
+        types.ShouldNotContain(static t => t.Name.Contains("AllowAll", StringComparison.OrdinalIgnoreCase));
+        types.ShouldNotContain(static t => t.Name.Contains("PlainHttp", StringComparison.OrdinalIgnoreCase));
+
+        var optionProperties = types
+            .Where(static t => t.Name.EndsWith("Options", StringComparison.Ordinal))
+            .SelectMany(static t => t.GetProperties())
+            .Select(static p => p.Name)
+            .ToList();
+        optionProperties.ShouldNotContain(static n => n.Contains("DisableAuth", StringComparison.OrdinalIgnoreCase)
+            || n.Contains("AllowAnonymous", StringComparison.OrdinalIgnoreCase)
+            || n.Contains("InsecureHttp", StringComparison.OrdinalIgnoreCase)
+            || n.Contains("SkipClientCertificate", StringComparison.OrdinalIgnoreCase));
+
+        // The shipped configuration offers https only, and parsing refuses anything else.
+        var settings = File.ReadAllText(Path.Combine(RepoPaths.Src("EkmMock.Server"), "appsettings.json"));
+        settings.ShouldContain("https://");
+        settings.ShouldNotContain("http://");
+        Should.Throw<InvalidOperationException>(() => EkmEndpointAddress.Parse("http://0.0.0.0:8443"));
+    }
+
+    [Fact]
+    public void Production_ComposesTheRealMtlsAuthorizer_AndEkmListenerPorts()
+    {
+        using var app = BuildApp([]);
+
+        app.Services.GetRequiredService<IEkmCallerAuthorizer>().ShouldBeOfType<MtlsCallerAuthorizer>();
+        app.Services.GetRequiredService<IEkmPortPolicy>().ShouldBeOfType<EkmListenerPorts>();
     }
 
     [Fact]
@@ -82,9 +124,7 @@ public sealed class ArchitectureTests
     [Fact]
     public void Host_UsesTheJsonConsoleFormatter_AndTheDevFlagSetsDevMode()
     {
-        var builder = WebApplication.CreateBuilder(["--dev"]);
-        builder.AddEkmMockServer(["--dev"]);
-        using var app = builder.Build();
+        using var app = BuildApp(["--dev"]);
 
         app.Services.GetRequiredService<IOptions<ConsoleLoggerOptions>>().Value.FormatterName.ShouldBe(ConsoleFormatterNames.Json);
         app.Services.GetRequiredService<IOptions<DevOptions>>().Value.Enabled.ShouldBeTrue();
@@ -93,9 +133,7 @@ public sealed class ArchitectureTests
     [Fact]
     public void Host_WithoutTheDevFlag_IsNotInDevMode()
     {
-        var builder = WebApplication.CreateBuilder([]);
-        builder.AddEkmMockServer([]);
-        using var app = builder.Build();
+        using var app = BuildApp([]);
 
         app.Services.GetRequiredService<IOptions<DevOptions>>().Value.Enabled.ShouldBeFalse();
         app.Services.GetRequiredService<IOptions<DevOptions>>().Value.SeedSampleKeys.ShouldBeFalse();
@@ -104,9 +142,7 @@ public sealed class ArchitectureTests
     [Fact]
     public void MasterKey_IsReadFromTheEnvironment_NeverFromConfiguration()
     {
-        var builder = WebApplication.CreateBuilder([]);
-        builder.AddEkmMockServer([]);
-        using var app = builder.Build();
+        using var app = BuildApp([]);
 
         app.Services.GetRequiredService<IMasterKeyProvider>().ShouldBeOfType<EnvironmentMasterKeyProvider>();
 

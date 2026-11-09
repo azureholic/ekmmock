@@ -1,7 +1,5 @@
 using EkmMock.Crypto;
 using EkmMock.Server.Hosting;
-using Microsoft.AspNetCore.Hosting.Server;
-using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -194,38 +192,5 @@ public sealed class HostCompositionTests
         info.ProxyName.ShouldBe("EkmMock v0.2.0");
         info.EkmVendor.ShouldBe("EkmMock");
         info.EkmProduct.ShouldBe("EkmMock Software HSM v0.2.0");
-    }
-
-    // ---- the plain HTTP guard -------------------------------------------------------------------------------------------------------
-
-    private sealed class FakeNetworkServer : IServer
-    {
-        public IFeatureCollection Features { get; } = new FeatureCollection();
-
-        public Task StartAsync<TContext>(Microsoft.AspNetCore.Hosting.Server.IHttpApplication<TContext> application, CancellationToken cancellationToken)
-            where TContext : notnull => Task.CompletedTask;
-
-        public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-
-        public void Dispose()
-        {
-        }
-    }
-
-    [Fact]
-    public void ARealListener_IsRefused_OutsideDevMode_UntilM3AddsMtls()
-    {
-        var ex = Should.Throw<InvalidOperationException>(() => PlainHttpGuard.Check(new FakeNetworkServer(), devMode: false));
-
-        ex.Message.ShouldContain("dev mode");
-    }
-
-    [Fact]
-    public void ARealListener_IsAllowedInDevMode_AndTheTestServerAlways()
-    {
-        Should.NotThrow(() => PlainHttpGuard.Check(new FakeNetworkServer(), devMode: true));
-
-        using var factory = new EkmFactory();
-        Should.NotThrow(() => PlainHttpGuard.Check(factory.Server, devMode: false));
     }
 }

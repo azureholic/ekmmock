@@ -1,13 +1,12 @@
 using EkmMock.Crypto;
 using EkmMock.Crypto.SelfTest;
-using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.Extensions.Options;
 
 namespace EkmMock.Server.Hosting;
 
 /// <summary>
-/// Runs before the server accepts traffic (hosted services start before the web server): checks the listener
-/// guard, opens the key store and namespaces, seeds optional sample keys, runs the startup self-test (spec 6.5) and
+/// Runs before the server accepts traffic (hosted services start before the web server): opens the key store and
+/// namespaces, seeds optional sample keys, runs the startup self-test (spec 6.5) and
 /// only then marks the engine ready. A missing master key, an unreadable store or a failed strict self-test throws
 /// and the host does not start.
 /// </summary>
@@ -28,7 +27,6 @@ internal sealed class EkmStartupService : IHostedService
     public Task StartAsync(CancellationToken cancellationToken)
     {
         var dev = _services.GetRequiredService<IOptions<DevOptions>>().Value;
-        PlainHttpGuard.Check(_services.GetService<IServer>(), dev.Enabled);
 
         // Constructing the backend loads the key store and throws without a master key (spec 6.2).
         var backend = _services.GetRequiredService<SoftwareCryptoBackend>();
@@ -78,26 +76,4 @@ internal sealed class EkmStartupService : IHostedService
             keys.Create(rsa.Namespace, rsa.Name, KeyType.Rsa, 2048);
         }
     }
-}
-
-/// <summary>
-/// M2 has no TLS: the EKM handlers must never answer on a real plain-HTTP port outside tests and <c>--dev</c>.
-/// Real listeners (TLS 1.3 + mTLS) arrive with M3, which replaces this guard.
-/// </summary>
-internal static class PlainHttpGuard
-{
-    public static void Check(IServer? server, bool devMode)
-    {
-        if (devMode || server is null || IsInProcessTestServer(server))
-        {
-            return;
-        }
-
-        throw new InvalidOperationException(
-            "EKM over plain HTTP is only available in dev mode (--dev) until mTLS is implemented (milestone M3).");
-    }
-
-    // The in-process test host has no network listener. Matched by namespace so the server needs no test or Kestrel reference.
-    internal static bool IsInProcessTestServer(IServer server)
-        => server.GetType().Namespace?.StartsWith("Microsoft.AspNetCore.TestHost", StringComparison.Ordinal) == true;
 }

@@ -191,16 +191,13 @@
   `EKMMOCK_MASTER_KEY_FILE`), read straight from the environment, never from `IConfiguration`; `appsettings.json` has no secret and a test
   guards that. Tests replace the provider through DI. `EKMMOCK_ALLOW_KEY_IMPORT=true` is read once into the backend options.
 - **`--dev`:** the flag sets `Dev:Enabled=true` (in-memory configuration, highest precedence). Effects: a missing master key becomes a
-  throw-away one (`SoftwareCryptoBackend.IsMasterKeyThrowAway`, logged as a warning now, a red console banner in M5) and the plain-HTTP guard
-  is relaxed. `Dev:SeedSampleKeys=true` (default false, also off in the shipped `appsettings.json`) creates `aes-key-1` (AES-256) and
+  throw-away one (`SoftwareCryptoBackend.IsMasterKeyThrowAway`, logged as a warning now, a red console banner in M5) and, since M3, a missing
+  `Tls:CertFile` becomes a generated throw-away `localhost` certificate (flagged, see "M3: Server certificate"). It never relaxes TLS or
+  authorization. `Dev:SeedSampleKeys=true` (default false, also off in the shipped `appsettings.json`) creates `aes-key-1` (AES-256) and
   `rsa-key-1` (RSA-2048) in `_default` if they do not exist (including as tombstones); they are created before the self-test, which then covers them.
-- **No plain HTTP on a real port (M3 TODO):** `Endpoints:Ekm:Url` is a placeholder key in `appsettings.json` that no M2 code reads. The M2
-  server configures no listener. `PlainHttpGuard` makes the host refuse to start when the `IServer` is anything but the in-process test
-  server unless `--dev` is set (a plain `dotnet run` fails with an explanatory error; verified). **M3 TODO:** replace the guard with real
-  Kestrel endpoints (TLS 1.3, cipher suites, mTLS) read from `Endpoints:Ekm:Url`, set `MaxRequestBodySize` so Kestrel does not answer
-  with its own non-ProxyError 413 before the handler's 16 KiB check (until then the handler enforces the limit itself, and a
-  `BadHttpRequestException` from the host is mapped to `400 InvalidRequest`), and re-verify chunked bodies and percent-encoded paths on real
-  Kestrel with automated tests (M2 verified them manually only, see "Not covered" below).
+- **No plain HTTP on a real port (resolved in M3):** in M2 the server configured no listener and `PlainHttpGuard` refused to start on a real
+  network server outside `--dev`. M3 replaced the guard with the real TLS 1.3 + mTLS listener (see "M3: ..." below); there is no plain-HTTP
+  mode at all, and the real-Kestrel tests cover chunked bodies, oversize bodies and percent-encoded paths that M2 had verified by hand.
 - **Configuration (`appsettings.json`, spec 16):** `ProxyInfo`, `Data:Path`, `SeedNamespaces`, `SelfTest:Strict`, `Dev`, plus the `Endpoints`
   placeholder. Bound to `ProxyInfoOptions` (validated on start: no empty value), `DataOptions`, `SelfTestSettings`, `DevOptions`,
   `SeedNamespaceOptions`. `Data:Path` defaults to `/data` as in the spec; tests always override the folder (`PostConfigure`), so no test can
@@ -300,6 +297,223 @@ recorded in OPEN-QUESTIONS.md (items 1, 9 to 14).
   parallel RSA tests; real benchmarks belong to M4/M7. A manual real-Kestrel run showed 0.2 to 0.4 ms for warm `info` calls (single samples,
   not a measurement).
 - **Chunked bodies** are tested in the test host as bodies without a `Content-Length` (and by hand against real Kestrel with
-  `Transfer-Encoding: chunked`: a 20 KB body gave the 400 ProxyError, a small one 200). Automated real-Kestrel tests come with M3.
+  `Transfer-Encoding: chunked`: a 20 KB body gave the 400 ProxyError, a small one 200). Automated in M3 (`KestrelLimitsTests`).
 - **Percent-encoded slashes:** the test host decodes `%2F` in the path, real Kestrel does not. A key name containing `%2F` is
-  `400 InvalidKeyName` on real Kestrel (verified by hand) and a routing 404 in the test host; the automated test therefore leaves it out.
+  `400 InvalidKeyName` on real Kestrel and a routing 404 in the test host. M3 automated the real-Kestrel case
+  (`APercentEncodedSlashInTheKeyName_IsInvalidKeyName_OnRealKestrel`, open question 16 answered).
+
+## M3: Where the code lives
+
+- **New project `src/EkmMock.Pki` (BCL only, no ASP.NET, no third-party crypto):** `CertificateAuthority` (self-signed root, intermediate,
+  server and client certificates with basicConstraints, keyUsage, serverAuth/clientAuth EKU, SAN, SKI/AKI, RSA 2048 or ECDSA P-256) and
+  `IssuedCertificate` (certificate + PKCS#8 key PEM + chain PEM, `WriteFiles`). It is the logic behind M8's `ekmmock certs` and the console's
+  "generate test root CA + server certificate" action, and the dev certificate of `--dev`. Chosen over putting it into `EkmMock.Crypto` (that
+  is the HSM engine, and must stay free of anything that is not the engine) and over `EkmMock.Server` (the CLI would then depend on the web
+  host). Spec 16 lists no such project; it is a deliberate, small addition.
+- **New project `tests/EkmMock.TestSupport`:** `TestPki` (a server CA, two trusted client CAs, one untrusted client CA), `TempFolder`,
+  `DistinguishedNames`. Shared by the server tests now and by the console/CLI tests later. It has no test framework reference.
+- **Server layout:** `Tls/` (server certificate provider and snapshot, client trust provider, handshake validator, TLS policy, CN reader, options),
+  `Connections/` (events, sink, store, metrics, ClientHello parser and tap, connection state, capture middleware), `Hosting/EkmKestrel.cs`
+  (the only place that configures listeners, `UseHttps` and `ClientCertificateMode`; an architecture test pins that), `Ekm/EkmAuth.cs`.
+  `Program.cs` calls `EkmServerServiceCollectionExtensions.BuildEkmMockApp`, which tests also use (with a `customize` hook for temp folders and
+  ephemeral ports). It has no switch for plain HTTP or disabled authorization.
+
+## M3: TLS stack (spec 5.1)
+
+- **Listener:** `Endpoints:Ekm:Url` (default `https://0.0.0.0:8443`; `https` is required, `*`, `localhost`, IPv4/IPv6 literals and port `0` are
+  accepted). `HttpsConnectionAdapterOptions`: `SslProtocols = Tls13`; `ClientCertificateMode = AllowCertificate`; `ClientCertificateValidation`
+  = `ClientCertificateValidator.Validate`; `ServerCertificateSelector` = the hot-reload provider; `HandshakeTimeout` = `Tls:HandshakeTimeout`
+  (default 10 s); protocols `Http1AndHttp2` (ALPN negotiates `h2` or `http/1.1`; both proven on the real listener). `OnAuthenticate` sets the
+  cipher suites (below) and swaps the selection callback for `ServerCertificateContext` so the TLS stack sends the **intermediates** of the
+  configured chain (built offline from the PEM file); the selector stays as the contract Kestrel requires. `AddServerHeader = false`.
+- **Cipher suites and the Windows caveat.** `TLS_AES_256_GCM_SHA384` and `TLS_AES_128_GCM_SHA256` are set through `CipherSuitesPolicy` in
+  `OnAuthenticate`. `CipherSuitesPolicy` throws `PlatformNotSupportedException` on Windows (the probe in `TlsPolicy` catches exactly that, so
+  support is detected, not assumed from the OS name). Where it is unsupported: a **warning at startup** names the limit, TLS 1.3 is still
+  enforced, and a **post-handshake check** (`ConnectionCapture.EvaluatePolicy`, run by the connection middleware after TLS) closes any
+  connection that negotiated another protocol or suite and records it as `cipher_suite_not_allowed`. Measured on Windows 11 (SChannel): the
+  negotiated suite is reported (`NegotiatedCipherSuite`) and was always `TLS_AES_256_GCM_SHA384`, so the check works there, but it cannot be
+  exercised with a real client (Windows clients cannot restrict suites either); `EvaluatePolicy` is therefore unit-tested directly.
+  This is a weaker guarantee than refusing in the handshake (the client sees an accepted handshake and then a closed connection), and the
+  honest statement for the About page is "not enforceable by the TLS stack on this OS". `TlsPolicy.Effective` (`EffectiveTlsPolicy`: protocol,
+  permitted suites, `CipherSuiteEnforcement`, summary text, OS) is the **About-data seam**; together with `IServerCertificateProvider.Info` /
+  `LastError` it holds everything the console's About and Certificates pages need. Production runs on Linux/OpenSSL where it is enforced:
+  **verified in a `mcr.microsoft.com/dotnet/sdk:10.0` Linux container** (a client offering only ChaCha20 is refused with
+  `no_common_cipher_suite`, one offering ChaCha20 + AES-256 gets AES-256, one offering only AES-128 gets AES-128).
+- **TLS session resumption is disabled** (`AllowTlsResume = false` in `OnAuthenticate`). Client-certificate validation is the only access control
+  (spec 2), and a resumed TLS 1.3 session skips the handshake validation, never delivers the intermediates the client sent, and keeps whatever
+  identity the original session authenticated. Every connection therefore gets a full handshake (one round trip in TLS 1.3 either way;
+  Managed HSM reuses keep-alive connections), the union validation and the capture of the presented chain run for every connection, and
+  `ConnectionEvent.Resumed` is reported as `false`. Authorization (per request, per namespace) would have re-validated a resumed certificate in any
+  case; this removes the dependence on how each OS handles a resumed session. **Honest note on the trigger:** during M3 an intermittent failure
+  appeared in 2 of 15 full-suite runs on Windows (never in isolation, never on Linux): a request that carried *no* client certificate was
+  authorized as the test client identity (`StatusCode 200/404` instead of `401`, in two adjacent tests of one class). Resumption of a session that
+  had authenticated another certificate was the only mechanism found that fits, so it was disabled; but it could **not** be reproduced as the cause
+  (400 alternating raw connections with and without a certificate, resumption on, produced no mix-up), so the cause is not proven. After the change
+  the suite ran green repeatedly (see the M3 report); the tests that would show a recurrence now print the exchange log and the handshake events.
+  See `EveryNewConnection_GetsAFullHandshake_WithTheClientCertificateValidatedEachTime` and `AClientWithoutACertificate_IsNeverServedAsAnEarlierClient_AcrossManyNewConnections`.
+- **Kestrel's validation callback is not replaceable per connection.** Kestrel passes its own callback to the `SslStream` constructor, and
+  setting `RemoteCertificateValidationCallback` in `OnAuthenticate` throws ("already set in the SslStream constructor"; found the hard way).
+  So the handshake verdict is attached to its connection through an `AsyncLocal<ConnectionState>` set by the capture middleware that awaits the
+  handshake (the validation callback runs synchronously inside that flow). Kestrel itself still owns "no certificate proceeds".
+- **Windows only: ephemeral keys.** A certificate loaded from PEM has an ephemeral key that SChannel cannot serve. The loader (and the PKI
+  library) re-imports the PFX bytes into a regular key container; harmless on Linux. Also on Windows, the TLS stack caches CA certificates it
+  sees in the current user's `CurrentUser\CA` store; with equal CA names that makes chain building ambiguous (observed: "unknown chain building
+  error" and `NotSignatureValid` against stale test roots). The tests therefore give every CA a unique name and remove what they left behind
+  (`TestPki.Dispose`); the dev-mode root CA name carries a random suffix. It is OS behaviour, not something EkmMock does.
+- **Kestrel limits (spec 4.1, 5.5):** `RequestHeadersTimeout` 2 s, `KeepAliveTimeout` 120 s, keep-alive on, `MaxRequestBodySize` 16 KiB. These are
+  server-wide Kestrel limits (there is no per-endpoint limit); the console (M5) raises its own via `IHttpMaxRequestBodySizeFeature`. Oversized
+  bodies still get **our** `400 InvalidRequest` ProxyError, never Kestrel's 413: a `Content-Length` over 16 KiB is refused by the handler before
+  the body is read (proven with a 5 MB announcement on a raw socket and with 20 000 bytes), chunked bodies too. Kestrel counts chunk framing against
+  its limit, so a chunked body of exactly 16384 bytes may be refused (then as the same ProxyError 400); a `Content-Length` body of exactly 16384 is
+  accepted and 16385 is refused. A client that keeps sending a huge body after the 400 may see the connection reset before it reads the answer
+  (TCP behaviour; Managed HSM bodies are well under 1 KiB). Slow request headers: the connection is closed after the 2 s timeout (tested).
+
+## M3: Client certificate validation and authorization (spec 5.1)
+
+- **Two stages, on purpose.** *Handshake* (`ClientCertificateValidator`): the namespace is not known yet, so the chain is built against the
+  **union of every namespace's root CAs** with `TrustMode = CustomRootTrust` (the OS trust store is never consulted), `RevocationMode = NoCheck`,
+  `DisableCertificateDownloads = true` (no AIA fetch, nothing leaves the process), and `VerificationFlags = IgnoreNotTimeValid`. It returns false
+  (handshake fails, reason `client_cert_not_trusted` with the chain status flags) when the chain does not build. No certificate: the handshake
+  proceeds. *Authorization* (`MtlsCallerAuthorizer`, the Auth slot after Route): the chain is built again against **that namespace's own roots**,
+  with `VerificationTime = now` and the application policy `clientAuth` (so validity and EKU **are** judged here), and then the CN is compared.
+- **Validity (the decision the brief asked for):** an expired or not-yet-valid client certificate passes the handshake and gets a **401** with the
+  reason (`CertificateExpired` / `CertificateNotYetValid`) in the log line and on the request context. Rejecting it in the handshake would give the
+  operator an opaque TLS failure and no captured exchange. The check covers the leaf and every chain element. An expired certificate is therefore
+  never authorized; it is only refused one stage later. Revocation is not checked (nothing to check against; Managed HSM publishes no CRL for it).
+- **EKU:** if the certificate carries an EKU it must include `clientAuth`; a certificate without any EKU extension is accepted (X.509: valid for all
+  purposes). Not checked at the handshake (a wrong EKU is a 401, not a handshake failure).
+- **CN rule (exact, case-sensitive, parsed):** the CN comes from the ASN.1 distinguished name (`X500DistinguishedName.EnumerateRelativeDistinguishedNames`),
+  never from the formatted `Subject` string, so commas, plus signs, quotes and backslashes inside a value cannot change what is compared. The
+  subject must contain **exactly one** CN attribute, in a single-valued RDN; no CN, two CNs, or a CN inside a multi-valued RDN is ambiguous and is
+  refused (`CommonNameMissingOrAmbiguous`). The comparison is ordinal against the namespace's list: no wildcard, no substring, no case folding, no
+  trimming (tested with 7 near-miss names, an escaped `pool, one+two`, a two-CN subject and an ASN.1 multi-valued RDN).
+- **Intermediates:** the certificates the client sent are captured at the handshake (at most 8) and added to the **ExtraStore** (never to the trust
+  anchors) when the chain is rebuilt per namespace. A client that does not send its issuing CA is not authenticated.
+  **Limit (identical on Windows and Linux, pinned by a test):** custom root trust anchors only at **self-signed roots**. A namespace that lists an
+  *issuing* CA in `caCertificates` instead of the root authenticates nobody. The Learn reference says `caCertificates` are root certificates, so this
+  matches the contract; the M6 trust import should warn about a non-root entry.
+- **Defence in depth:** if the connection's handshake recorded a client certificate (or none) and the request sees a different one, the request is
+  refused (`ClientCertificateChanged`, 401, unit-tested with hand-made connection features). It protects against any path by which the certificate
+  attached to a request could differ from the one the handshake validated; see the note on the intermittent test failure under "M3: TLS stack".
+- **Per-request, against the current trust:** authorization runs on every request, so removing a CA or a CN from a namespace locks out an
+  already open connection on its next request (401), and the handshake union refuses new connections at once (`RuntimeTrustTests`).
+- **Unauthenticated callers learn nothing:** Auth runs before everything but routing, so with no or a wrong certificate an unknown key, a bad
+  `api-version`, a wrong method or a broken body are all `401`, not `404`/`400` (tested). The 401 body is always `Unauthenticated` /
+  "Authentication failed"; the reason is internal (`auth_failure` in the log, `EkmRequestContext.Authentication` for the inspector).
+- **Captured for M4 on the request context (`EkmAuthResult`):** certificate present, subject, issuer, serial, SHA-256 thumbprint, not-before/after,
+  chain result (status flags), CN allowed, namespace matched, failure reason; `EkmRequestContext.Connection` links the exchange to its
+  `ConnectionState` (TLS version, suite, ALPN, handshake time, request count). The exchange log line gained `client_cn` and `auth_failure`.
+- **No bypass:** the authorizer and the port policy are DI services (`IEkmCallerAuthorizer`, `IEkmPortPolicy`). The only replacement is the in-process
+  test host of the M2 handler tests (`AllowAllCallerAuthorizer`, `AnyPortPolicy`, defined in the **test** assembly). An architecture test asserts the
+  production assembly has no allow-all type, no "disable auth/plain HTTP" option property, an https-only shipped configuration, an https-only URL
+  parser, and that the production composition resolves `MtlsCallerAuthorizer` and `EkmListenerPorts`.
+- **Trust snapshot refresh (`ClientTrustProvider`):** the namespace store publishes a new immutable list on every change, so a changed list
+  reference means changed trust. The next caller rebuilds the snapshot (union store + per-namespace sets) and swaps it with a compare-and-swap; a
+  racing loser is disposed; a retired snapshot is disposed after 30 s because a validation that started before the swap may still use it. No
+  timer, no event, no stale window, no change to M1's `NamespaceStore` (an event would add nothing M6 cannot get from the list reference).
+  `Chain`/`X509Chain` objects are created per validation and disposed with `using`.
+
+## M3: Port separation (spec 5.4)
+
+- `EkmPipeline.UseEkmPipeline` branches on `HttpContext.Connection.LocalPort` with `IEkmPortPolicy`. `EkmListenerPorts` is filled by the EKM
+  listener's own connection middleware (every EKM connection registers its local port before any request) and seeded with the configured port, so
+  ephemeral listeners work and **no other listener can claim an EKM port**. Everything on another port gets a plain `404` (M5 puts the console
+  pipeline there); on the EKM port anything that is not an EKM route is the EKM-style `404 NotFound` ProxyError (`/api/console/keys`, `/metrics`,
+  `/healthz`, `/readyz`, `/`, `/_blazor`: tested). A plain-HTTP Kestrel listener added next to the EKM endpoint answers EKM paths with 404 and
+  never reaches a handler (key usage counters and exchange log lines unchanged, tested). Routing precedes Auth, so a request for a path no
+  namespace claims is a 404 even without a certificate (see open question 22).
+
+## M3: Connection capture (spec 7, 8.2, 14 test 21)
+
+- **Shape.** Two Kestrel connection middlewares on the EKM `ListenOptions`: `Outer` **before** `UseHttps`, `Inner` **after** it. `Outer` records
+  *opened*, wraps the transport with a passive tap, awaits the rest of the pipeline and, when it returns, publishes *handshake failed* (if `Inner`
+  never reported success) and *closed* (duration, requests). `Inner` only runs when TLS succeeded: it reads `ITlsHandshakeFeature` (protocol,
+  `NegotiatedCipherSuite`, SNI) and Kestrel's `ISslStreamFeature` (ALPN), publishes *handshake succeeded* with the client certificate summary and
+  the handshake time, and applies the post-handshake cipher policy.
+- **Why not catch the exception:** Kestrel's `HttpsConnectionMiddleware` swallows handshake exceptions (debug log, closes the connection), so
+  nothing propagates to a wrapper; "closed without `Inner` having run" is the reliable signal. Parsing the debug log was rejected: its text and
+  event ids are internal, and the OS error text differs between SChannel and OpenSSL.
+- **Reason classification uses facts, not OS messages.** The tap copies the first TLS record (at most 16 KiB, no consumption, no delay, buffer
+  returned to the pool as soon as the hello is decided) and `ClientHelloParser` reads the ClientHello: offered versions (`supported_versions`, else
+  the legacy version), cipher suites, SNI, ALPN. Precedence (`ConnectionCapture.Classify`): (1) post-handshake policy violation; (2) the
+  handshake verdict of the client certificate (`client_cert_not_trusted`, with the chain status flags); (3) from the hello: `not_tls` (not a handshake
+  record: plain HTTP to the TLS port, port scans), `tls_version_not_supported` (TLS 1.3 not offered; the detail names what was offered, e.g.
+  "client offered TLS 1.2"), `no_common_cipher_suite` (TLS 1.3 offered but neither permitted suite; the detail names the TLS 1.3 suites offered);
+  (4) no complete hello: `handshake_timeout` if the connection lived to within 250 ms of `Tls:HandshakeTimeout`, else `client_closed`;
+  (5) `other`. Reason text and details are built from enumerations only (version names, suite names, chain status flags); SNI and ALPN are filtered
+  to hostname-like ASCII. No secret, certificate body or OS message ever enters an event.
+- **Reliability per OS.** Because the classification reads what the client *offered*, it is identical on every OS. Verified on **Windows 11 (SChannel,
+  .NET 10.0.14)** and in a **Linux container (OpenSSL, .NET 10.0.14)**: all reasons above, with real clients (`SslStream`, `HttpClient`, raw sockets). Not
+  observable: the exact OS-level reason inside a hello that looked acceptable (that becomes `other`). A ClientHello split across several records
+  (very large hellos) is `other`. A handshake that fails *after* an acceptable hello for a reason on the server side (for example an unusable
+  server key) is `other` too. (Session resumption is not observed but disabled, see "M3: TLS stack"; `Resumed` is `false`.)
+- **Events and the sink.** `ConnectionEvent` (flat record, no secrets by construction; a test pins that it has no certificate, byte-array or exception
+  member). `IConnectionEventSink.Publish` never blocks and never throws into the connection path. `ConnectionEventSink` assigns increasing sequence
+  numbers and enqueues into a `BoundedDropOldestQueue<T>` (a bounded `Channel` with `DropOldest`, default capacity 10 000, `Dropped` counter; reusable
+  for the inspector in M4). `ConnectionEventPump` (hosted service) drains the sink into `ConnectionEventStore` (a bounded ring, default 2 000,
+  `Snapshot()`, `WaitForAsync`); M4's inspector pipeline reads the same `Reader`. The connection path only ever enqueues.
+- **Metric:** `ekmmock_tls_handshake_failures_total{reason}` is a `System.Diagnostics.Metrics` counter on `Meter("EkmMock")` (label values are the
+  snake_case reasons) plus in-memory counts (`EkmMetrics.HandshakeFailureCounts`). The Prometheus exposition and the other instruments come with M7.
+- **Per-request link:** `EkmExchangeMiddleware` finds the `ConnectionState` by `HttpContext.Connection.Id` and counts the request
+  (`closed.RequestCount`; keep-alive reuse and HTTP/2 multiplexing are both visible).
+
+## M3: Server certificate hot reload (spec 5.3)
+
+- `ServerCertificateProvider`: PEM chain + PKCS#8/PKCS#1/SEC1 key from `Tls:CertFile` / `Tls:KeyFile` (leaf first, intermediates after; at most 8
+  certificates). A `FileSystemWatcher` on the files' directories triggers a debounced reload (`Tls:Debounce`, default 500 ms; cert and key are usually
+  written one after the other) and a **poll** (`Tls:PollInterval`, default 60 s) is the fallback for volume mounts and symlink swaps that raise no
+  events (tested with the event path parked for an hour and a 300 ms poll). The poll compares a SHA-256 over both file contents, so an unchanged
+  file is parsed once, and an unusable file is judged **once per content** (no repeated warning every poll).
+- **Atomic swap:** the candidate is loaded and validated off to the side (key belongs to the certificate, `serverAuth` EKU present or no EKU, not
+  expired, key usable), then published with one volatile write. Handshakes in progress and existing connections are untouched (a keep-alive
+  connection keeps the old certificate until it closes); new connections get the new one. Tested: six concurrent workers (four long-lived
+  keep-alive connections, two that open a new connection per request) issue requests continuously while the files are replaced: **zero failed
+  requests**, requests keep flowing after the swap, and the served thumbprint changes within the 200 ms test poll.
+- **Invalid or partial replacements keep the old certificate:** garbage, a new certificate with the old key (mismatch), a client certificate
+  (no `serverAuth`), an expired certificate: each logs one warning, sets `LastError`, and serves the old certificate; fixing the files recovers
+  and clears the error. An expired certificate **at startup** is still loaded (flagged `IsExpired`, logged at error level) so the operator gets a
+  running console that shows the problem. A missing/unreadable/broken certificate at startup refuses to start with a clear message.
+- **Replaced certificates are disposed after a grace period** (`Tls:RetiredCertificateGrace`, default 2 min) because a handshake that started
+  before the swap may still use them (relevant for Windows key containers).
+- **Console seam:** `IServerCertificateProvider.ReplaceAsync(certPem, keyPem)` validates, writes key then certificate atomically (temp file + rename,
+  `0600` for the key on Unix) when files are configured, swaps, and clears `LastError`; invalid input throws `ServerCertificateException` and changes
+  nothing. `Info` (`ServerCertificateInfo`) exposes subject, issuer, **SAN list**, not-before/after, SHA-256 thumbprint, chain length, source
+  (`File`/`Uploaded`/`DevelopmentGenerated`), loaded-at, **`ExpiresSoon` (within `Tls:ExpiryWarningDays`, default 30)**, `IsExpired`,
+  `IsDevelopmentCertificate`. Expiry is also logged as a warning/error at load.
+- **Dev convenience:** with `--dev` and no `Tls:CertFile`, a throw-away root CA (random-suffixed name) and a 60-day `localhost`/`127.0.0.1`/`::1`
+  server certificate are generated in memory (`Source = DevelopmentGenerated`, `IsDevelopmentCertificate = true`, warning "DEV MODE" at startup,
+  `DevelopmentRootCaPem` for the console). Without `--dev` and without files the host refuses to start. Configured files always win over dev mode.
+  M8's `ekmmock certs` / the dev script produce persistent test PKI with the same library.
+- **Server certificate versus Learn:** Learn says the proxy presents a certificate that chains to the root CA registered on the connection and
+  whose SAN matches the host (or `server_subject_common_name` for Private Link). EkmMock serves leaf + intermediates, never the root, and shows
+  the SAN list; the SAN/FQDN match itself is the operator's choice of certificate (the console warning for a mismatch with `Tls:ServerName` is an
+  M6 item).
+
+## M3: Learn comparison ("Configure networking and mTLS", read 9 November 2026)
+
+Agreement: TLS 1.3 minimum (EkmMock: TLS 1.3 only, which is the highest version .NET offers); required cipher suites exactly
+`TLS_AES_256_GCM_SHA384` and `TLS_AES_128_GCM_SHA256`; the proxy listens on TCP 443 (port 443 is required; EkmMock listens on 8443 by default and
+the container maps 443 to it, open question 6 stands for the non-root bind); `--server-ca-certificate` is the **root** CA (EkmMock serves leaf +
+intermediates and never relies on the root being sent); the server certificate must chain to it, be within its validity window and have a SAN that
+matches the host; the client certificate is allow-listed by **subject common name and root CA, never by fingerprint**, which survives Microsoft's
+rotation; IP allow-listing is not supported and mTLS is the only access control (no IP filter exists in EkmMock); certificate rotation of the
+Managed HSM client certificate needs no action while CN and `caCertificates` are unchanged.
+
+One tension, recorded as open question 17 instead of being decided silently: Learn's note says an attacker without a valid Managed HSM client
+certificate "can't complete the handshake". Spec 5.1 requires `ClientCertificateMode.AllowCertificate` so that a request *without* a certificate
+receives the JSON `401`. EkmMock follows the spec: a certificate that does not chain to a trusted CA fails the handshake; **no certificate** completes
+the handshake and gets `401 Unauthenticated` for every operation (no operation is ever served without an authorized certificate).
+
+## M3: Not covered / deliberately skipped
+
+- **The 60 s default poll and the 120 s keep-alive timeout are not waited for**: the poll interval is configurable and tested at 200-300 ms, the
+  default values are asserted (`TlsOptions`, `KestrelServerOptions`).
+- **TLS session resumption** is disabled rather than observed (`Resumed` is reported as `false`); see "M3: TLS stack".
+- **HTTP/2 specifics:** negotiated and authorized correctly on the real listener, but what Managed HSM actually uses is unknown (open question 5).
+- **Cipher enforcement is verified on Linux only in a container**, on a Windows-built binary (see the report in the commit message and the next
+  bullet); there is no CI run yet (M9).
+- **Linux test path:** `tests/run-server-tests-linux.ps1` builds on the host and runs the server tests in `mcr.microsoft.com/dotnet/sdk:10.0`
+  (Docker Desktop, Linux containers). The container could not restore NuGet packages in the environment where M3 was built (TLS handshake failure
+  towards api.nuget.org from inside the container), so the script runs the **already built** portable output on the container's runtime
+  (.NET 10.0.14, OpenSSL). It needs a stub content root for `WebApplicationFactory` (Windows path baked in at build time), which the script creates.
+

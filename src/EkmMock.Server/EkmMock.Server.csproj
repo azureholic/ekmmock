@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\EkmMock.Crypto\EkmMock.Crypto.csproj" />
+    <ProjectReference Include="..\EkmMock.Pki\EkmMock.Pki.csproj" />
   </ItemGroup>
 
   <ItemGroup>

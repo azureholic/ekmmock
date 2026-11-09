@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>EkmMock.Pki</RootNamespace>
+    <AssemblyName>EkmMock.Pki</AssemblyName>
+    <!-- Test-PKI generation (root CA, server and client certificates). BCL only: no ASP.NET Core, no third-party crypto. -->
+  </PropertyGroup>
+
+</Project>

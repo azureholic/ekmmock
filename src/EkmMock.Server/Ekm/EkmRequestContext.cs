@@ -69,6 +69,12 @@ internal sealed class EkmRequestContext
 
     /// <summary>True when the client went away before a response could be written.</summary>
     public bool ClientAborted { get; set; }
+
+    /// <summary>The outcome of the Auth stage (client certificate facts, chain result, CN allowed, namespace matched); null until Auth ran.</summary>
+    public EkmAuthResult? Authentication { get; set; }
+
+    /// <summary>The connection this exchange arrived on (TLS facts, handshake time), or null when there is none (in-process test host).</summary>
+    public Connections.ConnectionState? Connection { get; set; }
 }
 
 internal static class EkmRequestContextExtensions

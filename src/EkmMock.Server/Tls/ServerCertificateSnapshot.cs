@@ -1,0 +1,249 @@
+using System.Net.Security;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
+
+namespace EkmMock.Server.Tls;
+
+internal enum ServerCertificateSource
+{
+    /// <summary>Loaded from <c>Tls:CertFile</c> / <c>Tls:KeyFile</c>.</summary>
+    File,
+
+    /// <summary>Uploaded through the console (M6).</summary>
+    Uploaded,
+
+    /// <summary>A throw-away certificate generated in dev mode because none was configured. Never for production.</summary>
+    DevelopmentGenerated,
+}
+
+/// <summary>Read-only facts about the served certificate for the console (spec 5.3, 8.5 page 7): no key material.</summary>
+internal sealed record ServerCertificateInfo(
+    string Subject,
+    string Issuer,
+    IReadOnlyList<string> SubjectAlternativeNames,
+    DateTimeOffset NotBeforeUtc,
+    DateTimeOffset NotAfterUtc,
+    string ThumbprintSha256,
+    int ChainLength,
+    ServerCertificateSource Source,
+    DateTimeOffset LoadedAtUtc,
+    bool ExpiresSoon,
+    bool IsExpired,
+    bool IsDevelopmentCertificate);
+
+/// <summary>Why a certificate or key could not be used. The message is safe to show; it never includes file contents or key material.</summary>
+internal sealed class ServerCertificateException : Exception
+{
+    public ServerCertificateException(string message, Exception? inner = null)
+        : base(message, inner)
+    {
+    }
+}
+
+/// <summary>An immutable, ready-to-serve certificate: leaf with an accessible private key, its intermediates and the TLS context.</summary>
+internal sealed class ServerCertificateSnapshot : IDisposable
+{
+    private readonly X509Certificate2Collection _intermediates;
+
+    public ServerCertificateSnapshot(
+        X509Certificate2 certificate,
+        X509Certificate2Collection intermediates,
+        ServerCertificateSource source,
+        DateTimeOffset loadedAtUtc,
+        string contentFingerprint)
+    {
+        Certificate = certificate;
+        _intermediates = intermediates;
+        Source = source;
+        LoadedAtUtc = loadedAtUtc;
+        ContentFingerprint = contentFingerprint;
+        Thumbprint = certificate.GetCertHashString(HashAlgorithmName.SHA256);
+
+        // Offline: building the chain to send must never fetch anything from the network.
+        Context = SslStreamCertificateContext.Create(certificate, intermediates, offline: true);
+    }
+
+    public X509Certificate2 Certificate { get; }
+
+    /// <summary>What the TLS stack serves (leaf + the chain to send).</summary>
+    public SslStreamCertificateContext Context { get; }
+
+    public ServerCertificateSource Source { get; }
+
+    public DateTimeOffset LoadedAtUtc { get; }
+
+    /// <summary>SHA-256 over the source PEM texts, used to notice real changes of the files.</summary>
+    public string ContentFingerprint { get; }
+
+    public string Thumbprint { get; }
+
+    public int ChainLength => 1 + _intermediates.Count;
+
+    public DateTimeOffset NotAfterUtc => new(Certificate.NotAfter.ToUniversalTime(), TimeSpan.Zero);
+
+    public DateTimeOffset NotBeforeUtc => new(Certificate.NotBefore.ToUniversalTime(), TimeSpan.Zero);
+
+    public ServerCertificateInfo ToInfo(DateTimeOffset now, int expiryWarningDays) => new(
+        Certificate.Subject,
+        Certificate.Issuer,
+        SubjectAlternativeNames(Certificate),
+        NotBeforeUtc,
+        NotAfterUtc,
+        Thumbprint,
+        ChainLength,
+        Source,
+        LoadedAtUtc,
+        ExpiresSoon: NotAfterUtc - now < TimeSpan.FromDays(expiryWarningDays),
+        IsExpired: NotAfterUtc <= now,
+        IsDevelopmentCertificate: Source == ServerCertificateSource.DevelopmentGenerated);
+
+    public static IReadOnlyList<string> SubjectAlternativeNames(X509Certificate2 certificate)
+    {
+        var names = new List<string>();
+        foreach (var extension in certificate.Extensions)
+        {
+            if (extension.Oid?.Value != "2.5.29.17")
+            {
+                continue;
+            }
+
+            var san = new X509SubjectAlternativeNameExtension(extension.RawData, extension.Critical);
+            names.AddRange(san.EnumerateDnsNames().Select(static n => "DNS:" + n));
+            names.AddRange(san.EnumerateIPAddresses().Select(static ip => "IP:" + ip));
+        }
+
+        return names;
+    }
+
+    public void Dispose()
+    {
+        Certificate.Dispose();
+        foreach (var certificate in _intermediates)
+        {
+            certificate.Dispose();
+        }
+    }
+}
+
+/// <summary>Turns a PEM chain and PEM private key into a <see cref="ServerCertificateSnapshot"/>, or explains why that is not possible.</summary>
+internal static class ServerCertificateLoader
+{
+    private const string ServerAuthOid = "1.3.6.1.5.5.7.3.1";
+    private const string EkuExtensionOid = "2.5.29.37";
+    private const int MaxChainLength = 8;
+
+    public static ServerCertificateSnapshot Load(string certificatePem, string privateKeyPem, ServerCertificateSource source, DateTimeOffset now)
+    {
+        if (string.IsNullOrWhiteSpace(certificatePem) || string.IsNullOrWhiteSpace(privateKeyPem))
+        {
+            throw new ServerCertificateException("The certificate or the private key is empty");
+        }
+
+        var blocks = ReadCertificateBlocks(certificatePem);
+        if (blocks.Count == 0)
+        {
+            throw new ServerCertificateException("The certificate file contains no PEM certificate");
+        }
+
+        if (blocks.Count > MaxChainLength)
+        {
+            throw new ServerCertificateException("The certificate file contains too many certificates");
+        }
+
+        X509Certificate2? usable = null;
+        var intermediates = new X509Certificate2Collection();
+        try
+        {
+            usable = LoadLeafWithKey(blocks[0], privateKeyPem);
+
+            if (HasExtendedKeyUsage(usable) && !AllowsServerAuth(usable))
+            {
+                throw new ServerCertificateException("The certificate is not valid for TLS server authentication (serverAuth EKU is missing)");
+            }
+
+            for (var i = 1; i < blocks.Count; i++)
+            {
+                intermediates.Add(X509CertificateLoader.LoadCertificate(blocks[i]));
+            }
+
+            var fingerprint = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(certificatePem + "\n--\n" + privateKeyPem)));
+            return new ServerCertificateSnapshot(usable, intermediates, source, now, fingerprint);
+        }
+        catch (ServerCertificateException)
+        {
+            Cleanup(usable, intermediates);
+            throw;
+        }
+        catch (Exception ex) when (ex is CryptographicException or ArgumentException or InvalidOperationException or FormatException)
+        {
+            Cleanup(usable, intermediates);
+            throw new ServerCertificateException($"The certificate and key could not be loaded ({ex.GetType().Name})", ex);
+        }
+    }
+
+    private static X509Certificate2 LoadLeafWithKey(byte[] leafDer, string privateKeyPem)
+    {
+        using var leaf = X509CertificateLoader.LoadCertificate(leafDer);
+        using var withKey = X509Certificate2.CreateFromPem(leaf.ExportCertificatePem(), privateKeyPem);
+        if (!withKey.HasPrivateKey)
+        {
+            throw new ServerCertificateException("The private key does not belong to the certificate");
+        }
+
+        // SChannel cannot serve a certificate whose key is ephemeral (as loaded from PEM). Re-importing PFX bytes puts the key into
+        // a regular container on Windows, and is harmless on Linux/macOS. The PFX bytes never leave this method.
+        byte[] pfx;
+        try
+        {
+            pfx = withKey.Export(X509ContentType.Pfx);
+        }
+        catch (CryptographicException ex)
+        {
+            throw new ServerCertificateException("The private key cannot be used (it is not exportable)", ex);
+        }
+
+        try
+        {
+            return X509CertificateLoader.LoadPkcs12(pfx, null, X509KeyStorageFlags.Exportable);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(pfx);
+        }
+    }
+
+    private static List<byte[]> ReadCertificateBlocks(string pem)
+    {
+        var result = new List<byte[]>();
+        var text = pem.AsSpan();
+        while (PemEncoding.TryFind(text, out var fields))
+        {
+            if (text[fields.Label].SequenceEqual("CERTIFICATE"))
+            {
+                result.Add(Convert.FromBase64String(text[fields.Base64Data].ToString()));
+            }
+
+            text = text[fields.Location.End..];
+        }
+
+        return result;
+    }
+
+    private static bool HasExtendedKeyUsage(X509Certificate2 certificate)
+        => certificate.Extensions.Cast<X509Extension>().Any(static e => e.Oid?.Value == EkuExtensionOid);
+
+    private static bool AllowsServerAuth(X509Certificate2 certificate)
+        => certificate.Extensions.Cast<X509Extension>()
+            .Where(static e => e.Oid?.Value == EkuExtensionOid)
+            .Select(static e => new X509EnhancedKeyUsageExtension(e, e.Critical))
+            .Any(static e => e.EnhancedKeyUsages.Cast<Oid>().Any(static o => o.Value == ServerAuthOid));
+
+    private static void Cleanup(X509Certificate2? leaf, X509Certificate2Collection intermediates)
+    {
+        leaf?.Dispose();
+        foreach (var certificate in intermediates)
+        {
+            certificate.Dispose();
+        }
+    }
+}

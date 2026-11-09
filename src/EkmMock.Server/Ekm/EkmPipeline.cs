@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Diagnostics;
+using EkmMock.Server.Connections;
 using EkmMock.Server.Hosting;
 
 namespace EkmMock.Server.Ekm;
@@ -15,20 +16,23 @@ internal sealed class EkmExchangeMiddleware
     private readonly ExchangeCounter _counter;
     private readonly TimeProvider _time;
     private readonly ILogger _logger;
+    private readonly Connections.ConnectionRegistry _connections;
 
-    public EkmExchangeMiddleware(RequestDelegate next, ExchangeCounter counter, TimeProvider time, ILoggerFactory loggerFactory)
+    public EkmExchangeMiddleware(RequestDelegate next, ExchangeCounter counter, TimeProvider time, ILoggerFactory loggerFactory, Connections.ConnectionRegistry connections)
     {
         _next = next;
         _counter = counter;
         _time = time;
         _logger = loggerFactory.CreateLogger("EkmMock.Exchange");
+        _connections = connections;
     }
 
     public async Task InvokeAsync(HttpContext context)
     {
         var exchange = new EkmRequestContext(_counter.Next(), context.Connection.Id, _time.GetUtcNow(), Stopwatch.GetTimestamp());
         context.Features.Set(exchange);
-
+        exchange.Connection = _connections.TryGet(context.Connection.Id);
+        exchange.Connection?.RequestStarted();
         try
         {
             await _next(context).ConfigureAwait(false);
@@ -95,18 +99,23 @@ internal sealed class EkmRouteMiddleware
     }
 }
 
-/// <summary>The EKM request pipeline in the order of spec section 7 (connection-level stages come with M3).</summary>
+/// <summary>
+/// The EKM request pipeline in the order of spec section 7. The connection-level stages (ConnectionCapture, TLS) are Kestrel connection
+/// middleware on the EKM listener (<c>EkmKestrelSetup</c>); everything here is HTTP middleware that runs only on the EKM port.
+/// </summary>
 internal static class EkmPipeline
 {
     /// <summary>
-    /// In M2 every request reaches the EKM branch. M5 narrows this to the EKM listener (<c>HttpContext.Connection.LocalPort</c>)
-    /// and gives the console port its own branch (spec 5.4).
+    /// Wires the port separation of spec 5.4: the EKM pipeline runs <em>only</em> for connections that arrived on an EKM listener port
+    /// (<see cref="IEkmPortPolicy"/>, decided by <c>HttpContext.Connection.LocalPort</c>, never by Host header). Every other port gets a
+    /// plain <c>404</c> for everything, so EKM routes cannot be reached through the console listener. The console pipeline (M5) replaces that
+    /// 404 branch; on the EKM port anything that is not an EKM route is answered with the EKM-style ProxyError <c>404</c>.
     /// </summary>
-    public static bool IsEkmRequest(HttpContext context) => true;
-
     public static IApplicationBuilder UseEkmPipeline(this IApplicationBuilder app)
     {
-        return app.UseWhen(IsEkmRequest, branch =>
+        var ports = app.ApplicationServices.GetRequiredService<IEkmPortPolicy>();
+
+        app.UseWhen(context => ports.IsEkmPort(context.Connection.LocalPort), branch =>
         {
             // [M4] RequestCapture goes before the exchange middleware: it must see rejected requests too.
             branch.UseMiddleware<EkmExchangeMiddleware>();
@@ -114,9 +123,20 @@ internal static class EkmPipeline
             // Routing is resolved early because faults (per namespace/key/op) and auth (per namespace) both need it.
             branch.UseMiddleware<EkmRouteMiddleware>();
 
-            // [M7] Faults → [M3] Auth → [M7] Limits slot in here, in that order.
+            // [M7] Faults slot in before Auth; [M7] Limits after it.
+            branch.UseMiddleware<EkmAuthMiddleware>();
+
             branch.Run(static context => context.RequestServices.GetRequiredService<EkmDispatcher>().InvokeAsync(context));
         });
+
+        // Reached only by requests that did not arrive on an EKM port.
+        app.Run(static context =>
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            return Task.CompletedTask;
+        });
+
+        return app;
     }
 }
 
@@ -157,6 +177,8 @@ internal static class EkmExchangeLog
                 new("error_code", e.ErrorCode),
                 new("duration_ms", Math.Round(e.Duration.TotalMilliseconds, 3)),
                 new("crypto_ms", Math.Round(e.CryptoElapsed.TotalMilliseconds, 3)),
+                new("client_cn", e.Authentication?.CommonName),
+                new("auth_failure", e.Authentication is { Succeeded: false } auth ? auth.Failure.ToString() : null),
                 new("exception_type", e.UnexpectedExceptionType),
             ];
             Summary = $"EKM {e.Operation?.WireName() ?? "unrouted"} {e.StatusCode} exchange={e.ExchangeId}";

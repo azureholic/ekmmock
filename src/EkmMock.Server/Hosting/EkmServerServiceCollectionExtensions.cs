@@ -1,5 +1,8 @@
 using EkmMock.Crypto;
+using EkmMock.Server.Connections;
 using EkmMock.Server.Ekm;
+using EkmMock.Server.Tls;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 
@@ -40,6 +43,21 @@ internal static class EkmServerServiceCollectionExtensions
         return builder;
     }
 
+    /// <summary>
+    /// Builds the complete host exactly as <see cref="Program"/> runs it (services, Kestrel endpoint, pipeline). Tests use the
+    /// <paramref name="customize"/> hook to point it at temporary folders and ephemeral ports; it is not a way to weaken security
+    /// because nothing here has a switch for plain HTTP or disabled authorization.
+    /// </summary>
+    public static WebApplication BuildEkmMockApp(string[] args, Action<WebApplicationBuilder>? customize = null)
+    {
+        var builder = WebApplication.CreateBuilder(args);
+        builder.AddEkmMockServer(args);
+        customize?.Invoke(builder);
+        var app = builder.Build();
+        app.UseEkmPipeline();
+        return app;
+    }
+
     public static IServiceCollection AddEkmMockServices(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
@@ -51,9 +69,28 @@ internal static class EkmServerServiceCollectionExtensions
         services.AddOptions<DataOptions>().BindConfiguration(DataOptions.SectionName);
         services.AddOptions<SelfTestSettings>().BindConfiguration(SelfTestSettings.SectionName);
         services.AddOptions<DevOptions>().BindConfiguration(DevOptions.SectionName);
+        services.AddOptions<EkmEndpointOptions>().BindConfiguration(EkmEndpointOptions.SectionName);
+        services.AddOptions<TlsOptions>().BindConfiguration(TlsOptions.SectionName);
 
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<ExchangeCounter>();
+
+        // ---- EKM endpoint: TLS, trust, authorization and connection capture (M3) ----
+        services.TryAddSingleton<TlsPolicy>();
+        services.TryAddSingleton(static sp => new ClientTrustProvider(sp.GetRequiredService<NamespaceStore>()));
+        services.TryAddSingleton<ClientCertificateValidator>();
+        services.TryAddSingleton<ConnectionRegistry>();
+        services.TryAddSingleton<ConnectionEventSink>();
+        services.TryAddSingleton<IConnectionEventSink>(static sp => sp.GetRequiredService<ConnectionEventSink>());
+        services.TryAddSingleton<ConnectionEventStore>();
+        services.TryAddSingleton<EkmMetrics>();
+        services.TryAddSingleton<EkmListenerPorts>();
+        services.TryAddSingleton<IEkmPortPolicy>(static sp => sp.GetRequiredService<EkmListenerPorts>());
+        services.TryAddSingleton<ServerCertificateProvider>();
+        services.TryAddSingleton<IServerCertificateProvider>(static sp => sp.GetRequiredService<ServerCertificateProvider>());
+        services.TryAddSingleton<IEkmCallerAuthorizer, MtlsCallerAuthorizer>();
+        services.AddHostedService<ConnectionEventPump>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IConfigureOptions<KestrelServerOptions>, EkmKestrelSetup>());
 
         // Secrets never come from configuration: the provider reads EKMMOCK_MASTER_KEY / EKMMOCK_MASTER_KEY_FILE directly.
         services.TryAddSingleton<IMasterKeyProvider>(static sp

@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>EkmMock.TestSupport</RootNamespace>
+    <AssemblyName>EkmMock.TestSupport</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <!-- Shared test helpers (test PKI, temp folders). Not a test project itself: it has no test framework reference. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\EkmMock.Pki\EkmMock.Pki.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -47,8 +47,9 @@ internal sealed class DevOptions
     public const string SectionName = "Dev";
 
     /// <summary>
-    /// Dev mode (the <c>--dev</c> command line flag sets it): a missing master key becomes a throw-away one and the
-    /// host may listen on plain HTTP until M3 adds mTLS. The console shows a red banner for this later.
+    /// Dev mode (the <c>--dev</c> command line flag sets it): a missing master key becomes a throw-away one and, without a configured
+    /// <c>Tls:CertFile</c>, a throw-away test certificate for <c>localhost</c> is generated. It never relaxes TLS or authorization:
+    /// there is no plain-HTTP mode. The console shows a red banner for this later.
     /// </summary>
     public bool Enabled { get; set; }
 
