@@ -6,6 +6,7 @@ using EkmMock.Server.Ekm;
 using EkmMock.Server.Hosting;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Options;
@@ -16,9 +17,15 @@ namespace EkmMock.Server.Tests;
 public sealed class ArchitectureTests
 {
     // Builds the production composition on the in-process test server: constructing the real Kestrel server would (correctly) demand a TLS certificate.
-    private static WebApplication BuildApp(string[] args)
+    // The data folder points at a temporary folder: the default /data cannot be created by an unprivileged user (a CI runner) and must not be created on a developer machine.
+    private static WebApplication BuildApp(string[] args, string? dataPath = null)
     {
         var builder = WebApplication.CreateBuilder(args);
+        if (dataPath is not null)
+        {
+            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?> { ["Data:Path"] = dataPath });
+        }
+
         builder.AddEkmMockServer(args);
         builder.WebHost.UseTestServer();
         return builder.Build();
@@ -93,7 +100,8 @@ public sealed class ArchitectureTests
     [Fact]
     public void Production_ComposesTheRealMtlsAuthorizer_AndEkmListenerPorts()
     {
-        using var app = BuildApp([]);
+        using var folder = new EkmMock.TestSupport.TempFolder();
+        using var app = BuildApp([], folder.Path);
 
         app.Services.GetRequiredService<IEkmCallerAuthorizer>().ShouldBeOfType<MtlsCallerAuthorizer>();
         app.Services.GetRequiredService<IEkmPortPolicy>().ShouldBeOfType<EkmListenerPorts>();

@@ -9,7 +9,7 @@
       build             dotnet build -warnaserror
       test              dotnet test
       image             docker build -f deploy/docker/Dockerfile -t ekmmock:local .
-      compose-up        docker compose -f deploy/docker/compose.dev.yaml up -d --build --wait
+      compose-up        docker compose -f deploy/docker/compose.dev.yaml up -d --build, then waits for the seeding container and a healthy server
       conformance       the conformance suite inside the compose dev container (report: .\out\conformance-report.json)
       compose-down      stop the compose dev stack and delete its volume
       clean             remove build output and .\out
@@ -126,7 +126,24 @@ for (`$i = 0; `$i -lt 90; `$i++) {
         Invoke-Cli (Get-ConformanceArguments -Pki $pki -Url "https://localhost:$ekmPort" -ConsoleUrl "https://127.0.0.1:$consolePort" -Report (Join-Path $out 'conformance-report.json'))
     }
 
-    'compose-up' { Invoke-Native 'docker' ($compose + @('up', '-d', '--build', '--wait')) }
+    'compose-up' {
+        # `up --wait` fails on some Compose versions because the one-shot containers exit, so wait for them explicitly: dev-seed ends only after dev-init and a healthy server.
+        Invoke-Native 'docker' ($compose + @('up', '-d', '--build'))
+        $code = (& docker wait ekmmock-dev-seed)
+        if ($code -ne '0') {
+            & docker @compose logs dev-init dev-seed
+            throw "dev-seed failed (exit code $code)"
+        }
+        for ($i = 0; $i -lt 90; $i++) {
+            if ((& docker inspect -f '{{.State.Health.Status}}' ekmmock-dev) -eq 'healthy') {
+                'EkmMock is up (healthy), sample keys aes-key-1 and rsa-key-1, fake Managed HSM client trusted.'
+                return
+            }
+            Start-Sleep -Seconds 1
+        }
+        & docker @compose logs ekmmock
+        throw 'ekmmock did not become healthy'
+    }
 
     'compose-down' { Invoke-Native 'docker' ($compose + @('down', '-v')) }
 

@@ -44,5 +44,7 @@ public abstract class ConsoleTestBase : BunitContext
 
     internal FakeUser UserFake { get; } = new();
 
-    internal static TimeSpan Patience { get; } = TimeSpan.FromSeconds(5);
+    // How long a test waits for something asynchronous to show up. A passing test returns as soon as the condition holds, so a long limit costs nothing; it only gives a slow machine
+    // (the first mutual-TLS handshake on a shared Windows CI runner took more than 5 s) room. A test that is really broken still fails, just later.
+    internal static TimeSpan Patience { get; } = TimeSpan.FromSeconds(20);
 }

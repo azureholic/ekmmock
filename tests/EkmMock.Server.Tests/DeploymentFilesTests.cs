@@ -261,7 +261,7 @@ public sealed partial class DeploymentFilesTests
         text.ShouldContain("dotnet build EkmMock.sln --configuration Release -warnaserror");
         text.ShouldContain("dotnet test --solution EkmMock.sln");
         text.ShouldContain("dotnet list EkmMock.sln package --vulnerable --include-transitive");
-        text.ShouldContain("docker compose -f deploy/docker/compose.dev.yaml up -d --build --wait");
+        text.ShouldContain("make compose-up");
         text.ShouldContain("make conformance");
         text.ShouldContain("down -v");
         text.ShouldContain("hashFiles('Directory.Packages.props', 'global.json')");

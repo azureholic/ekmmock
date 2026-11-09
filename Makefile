@@ -4,7 +4,7 @@
 #   make build        dotnet build -warnaserror
 #   make test         dotnet test
 #   make image        build the container image (deploy/docker/Dockerfile) as ekmmock:local
-#   make compose-up   start the dev stack: docker compose -f deploy/docker/compose.dev.yaml up -d --build --wait
+#   make compose-up   start the dev stack (docker compose -f deploy/docker/compose.dev.yaml up -d --build, then waits for the seeding and a healthy server)
 #   make conformance  run `ekmmock test conformance` inside the dev stack's container (report: ./out/conformance-report.json)
 #   make conformance-host   the same suite from the host CLI against a running `make dev`
 #   make compose-down stop the dev stack and delete its volume
@@ -64,7 +64,14 @@ dev:
 	dotnet run --project src/EkmMock.Server --no-build -- --dev
 
 compose-up:
-	$(COMPOSE) up -d --build --wait
+	$(COMPOSE) up -d --build
+	# `up --wait` fails on some Compose versions because the one-shot containers exit, so wait for them explicitly: dev-seed ends only after dev-init and a healthy server.
+	@code=$$(docker wait ekmmock-dev-seed); \
+	if [ "$$code" != "0" ]; then echo "dev-seed failed (exit code $$code)" >&2; $(COMPOSE) logs dev-init dev-seed >&2; exit 1; fi
+	@for i in $$(seq 1 90); do \
+	  if [ "$$(docker inspect -f '{{.State.Health.Status}}' ekmmock-dev)" = "healthy" ]; then echo "EkmMock is up (healthy), sample keys aes-key-1 and rsa-key-1, fake Managed HSM client trusted."; exit 0; fi; \
+	  sleep 1; \
+	done; echo "ekmmock did not become healthy" >&2; $(COMPOSE) logs ekmmock >&2; exit 1
 
 # The suite from the host against `make dev` (the CLI runs on the host, so it needs the .NET SDK).
 conformance-host:

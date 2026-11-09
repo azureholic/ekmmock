@@ -1,4 +1,6 @@
-# EkmMock for a laptop try-out (spec 11.2): `docker compose -f deploy/docker/compose.dev.yaml up -d --build --wait`, then run the conformance suite.
+# EkmMock for a laptop try-out (spec 11.2): `make compose-up` (or `scripts\dev.ps1 compose-up`), then run the conformance suite.
+# The plain command is `docker compose -f deploy/docker/compose.dev.yaml up -d --build`; the make/script target also waits until the one-shot seeding container has finished
+# and the server is healthy (`up --wait` is not used: some Compose versions fail it because the one-shot containers exit).
 #
 # What this does, with no manual steps:
 #   dev-init  (one-shot)  creates a master key and a TEST PKI inside the data volume: a test root CA, a server certificate (localhost, ekmmock, 127.0.0.1, ::1), a fake

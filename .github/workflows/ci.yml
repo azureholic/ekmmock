@@ -198,7 +198,7 @@ jobs:
           persist-credentials: false
 
       - name: Build the image and start the dev stack
-        run: docker compose -f deploy/docker/compose.dev.yaml up -d --build --wait
+        run: make compose-up
 
       - name: Check the container hardening
         run: |
