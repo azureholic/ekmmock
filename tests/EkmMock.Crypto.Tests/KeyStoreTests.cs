@@ -128,7 +128,7 @@ public sealed class KeyStoreTests : IDisposable
         backend.Create(key.Namespace, key.Name, KeyType.Oct, 256);
         backend.Wrap(key, WrapAlgorithm.A256KWP, Fx.Random(32));
 
-        var deadline = DateTime.UtcNow.AddSeconds(10);
+        var deadline = DateTime.UtcNow.AddSeconds(30); // a passing run returns at once; the generous limit is for a starved CI runner
         long persisted = 0;
         while (DateTime.UtcNow < deadline && persisted == 0)
         {

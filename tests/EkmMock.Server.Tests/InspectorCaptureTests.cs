@@ -20,7 +20,7 @@ internal static class InspectorHarness
     /// <summary>Waits until the consumer has stored at least <paramref name="count"/> exchanges, and returns all of them, oldest first.</summary>
     public static async Task<IReadOnlyList<ExchangeRecord>> SettleAsync(IInspector inspector, int count, TimeSpan? timeout = null)
     {
-        var reached = await Wait.UntilAsync(() => inspector.Count() >= count, timeout ?? TimeSpan.FromSeconds(10), TimeSpan.FromMilliseconds(5));
+        var reached = await Wait.UntilAsync(() => inspector.Count() >= count, timeout ?? TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(5)); // 30 s: a passing run returns at once; the limit is for a starved CI runner
         reached.ShouldBeTrue($"the inspector stored {inspector.Count()} of {count} exchanges");
         return [.. inspector.Query(paging: new ExchangePaging { Limit = ExchangePaging.MaxLimit }).Items.Reverse()];
     }

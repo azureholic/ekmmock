@@ -57,8 +57,10 @@ jobs:
         run: dotnet build EkmMock.sln --configuration Release -warnaserror
 
       - name: Test
+        # One test assembly at a time: four assemblies on a two-core runner starve each other and the timer-based tests flake (the first Windows runs showed it).
         run: >
           dotnet test --solution EkmMock.sln --configuration Release --no-build
+          --max-parallel-test-modules 1
           --filter-not-trait "Category=Browser"
           --report-xunit-trx --results-directory TestResults/linux
 
@@ -119,8 +121,10 @@ jobs:
         run: dotnet build EkmMock.sln --configuration Release -warnaserror
 
       - name: Test
+        # One test assembly at a time, see the Linux job.
         run: >
           dotnet test --solution EkmMock.sln --configuration Release --no-build
+          --max-parallel-test-modules 1
           --filter-not-trait "Category=Browser"
           --report-xunit-trx --results-directory TestResults/windows
 
