@@ -1,0 +1,291 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/github/awesome-copilot",
+  "requestedSource": "https://aka.ms/awesome-copilot",
+  "revision": "b13e55f85ffdf451d40d09839cb1e337bf3eda98",
+  "license": "MIT",
+  "selection": "EkmMock specification v0.2: .NET 10, Blazor, crypto testing, trust-boundary review, Docker, Bicep VM/ACI, CI",
+  "adaptationPolicy": "Spec-first guards; remove conflicting defaults; no model pins; host-compatible tools; local prompt launchers derived from selected skills and agents.",
+  "upstreamPromptsDirectoryPresent": false,
+  "files": [
+    {
+      "path": ".github/agents/bicep-implement.agent.md",
+      "upstreamPath": "agents/bicep-implement.agent.md",
+      "upstreamSha256": "8b9eaffd40c4e1e6326bef8aa34daf5d880550512ddf1eb89e36fd2daca7edac",
+      "localSha256": "d2ff5811cdc78237f503be3b97aced45a954f9a9106df15523cfc9b26bbe4fb6",
+      "adapted": true
+    },
+    {
+      "path": ".github/agents/expert-dotnet-software-engineer.agent.md",
+      "upstreamPath": "agents/expert-dotnet-software-engineer.agent.md",
+      "upstreamSha256": "28a306e1a700abd0435f1fd6aef365341ac2519cc460f0c83a6f2a93332bf915",
+      "localSha256": "ce16c07523c0bde00c3ee90dbb1cda83c38c5066f732df3e0c2d42bea398a199",
+      "adapted": true
+    },
+    {
+      "path": ".github/agents/implementation-plan.agent.md",
+      "upstreamPath": "agents/implementation-plan.agent.md",
+      "upstreamSha256": "eec19038008d9a73d21ddf679babf1f0e971a1b3bee3d11e6d17fbdb2e5082d0",
+      "localSha256": "4922790eebd04ea390d6d1065ad88469304fbb5a10cdbf24404363ee6759481a",
+      "adapted": true
+    },
+    {
+      "path": ".github/agents/se-security-reviewer.agent.md",
+      "upstreamPath": "agents/se-security-reviewer.agent.md",
+      "upstreamSha256": "3b5fec1f93bf21e20b865493ceca30708738642887d00c68e0bd0051f2d0e1fc",
+      "localSha256": "1bb56b2b436c41d755a6a5f0d4db592948d063cc49f276179a4d43467e0a385a",
+      "adapted": true
+    },
+    {
+      "path": ".github/instructions/bicep-code-best-practices.instructions.md",
+      "upstreamPath": "instructions/bicep-code-best-practices.instructions.md",
+      "upstreamSha256": "e5dc63050d0e55b9c658292e5bbf0d15ed0babdacafe449195c037a09d7aad50",
+      "localSha256": "b4af5285c71cacd487e032dfac72d099d4d20f91e3b16762479c8b536fc6a817",
+      "adapted": true
+    },
+    {
+      "path": ".github/instructions/blazor.instructions.md",
+      "upstreamPath": "instructions/blazor.instructions.md",
+      "upstreamSha256": "d02cabaccbddafeca0330832973f75b35a25330b61c60778b726b3f5ddfcb6b1",
+      "localSha256": "2537b466849b00ddf6d90fc73139480fbdf752c5b635d54ee8372a7f0793232d",
+      "adapted": true
+    },
+    {
+      "path": ".github/instructions/csharp.instructions.md",
+      "upstreamPath": "instructions/csharp.instructions.md",
+      "upstreamSha256": "260d67446b88b08f996b4849d55df7e57674d5ff1d80a7cf481660d78c0e3690",
+      "localSha256": "636c6071e69eba5e150e6af14be78b94dd4232a10b03e123342d337586a0f337",
+      "adapted": true
+    },
+    {
+      "path": ".github/skills/create-architectural-decision-record/SKILL.md",
+      "upstreamPath": "skills/create-architectural-decision-record/SKILL.md",
+      "upstreamSha256": "c11af0c34fa034e36e622ad97f1194824c3cbbe675a8b17cdc0bedc91b188a72",
+      "localSha256": "f2e3cf12aecdf98fadfcc4b9f933e8d2f8b075fd02f5218121560efce50c992e",
+      "adapted": true
+    },
+    {
+      "path": ".github/skills/create-implementation-plan/SKILL.md",
+      "upstreamPath": "skills/create-implementation-plan/SKILL.md",
+      "upstreamSha256": "11caba1048cbdbfca6f7ce13a0e0580d6e9d943f7b775ee24978ece1d3334066",
+      "localSha256": "fd45c366f588dae9401e66512573c5fba2865571b1d6e4de8c7274db60d16968",
+      "adapted": true
+    },
+    {
+      "path": ".github/skills/csharp-async/SKILL.md",
+      "upstreamPath": "skills/csharp-async/SKILL.md",
+      "upstreamSha256": "d52c0812a3e4325ab0d89aebd074efe5e6246e722522180f8613ef3c72a72acc",
+      "localSha256": "86c0bdb445769a6e93ec0aa65c6d61f6aae4ab40f9286f1f9757434a08b61ba1",
+      "adapted": true
+    },
+    {
+      "path": ".github/skills/csharp-xunit/SKILL.md",
+      "upstreamPath": "skills/csharp-xunit/SKILL.md",
+      "upstreamSha256": "7a2d020e24a5788c4999c05c86902599bb31a5df70b2595b37c00beb802cdb49",
+      "localSha256": "ba50407826db59d5353af9abd1d2619333cf6edff72bb511c2ef446abd60cf0b",
+      "adapted": true
+    },
+    {
+      "path": ".github/skills/fluentui-blazor/SKILL.md",
+      "upstreamPath": "skills/fluentui-blazor/SKILL.md",
+      "upstreamSha256": "d23fbc5dfb9a1580f930652bdfbf8c891edbaaa3bf162fb4904de9cba74f01b0",
+      "localSha256": "38bdcf1a464bc3d1e59d047a3a170ae6c3882f846a22b54fb1c69765a3883386",
+      "adapted": true
+    },
+    {
+      "path": ".github/skills/fluentui-blazor/references/DATAGRID.md",
+      "upstreamPath": "skills/fluentui-blazor/references/DATAGRID.md",
+      "upstreamSha256": "aa1866dd3cef4e97fec2a01730098f3cfeb8c3b36b2fd6376fa1bb897088b94c",
+      "localSha256": "aa1866dd3cef4e97fec2a01730098f3cfeb8c3b36b2fd6376fa1bb897088b94c",
+      "adapted": false
+    },
+    {
+      "path": ".github/skills/fluentui-blazor/references/LAYOUT-AND-NAVIGATION.md",
+      "upstreamPath": "skills/fluentui-blazor/references/LAYOUT-AND-NAVIGATION.md",
+      "upstreamSha256": "89d585fbd9ca54d6f742867c4775a39a3e634067eff9006edd575d97da44c749",
+      "localSha256": "89d585fbd9ca54d6f742867c4775a39a3e634067eff9006edd575d97da44c749",
+      "adapted": false
+    },
+    {
+      "path": ".github/skills/fluentui-blazor/references/SETUP.md",
+      "upstreamPath": "skills/fluentui-blazor/references/SETUP.md",
+      "upstreamSha256": "297ae2f3ceade5e6c79d03b9739150cd2ee687714e78e0b0ffbe94ff6f20e062",
+      "localSha256": "297ae2f3ceade5e6c79d03b9739150cd2ee687714e78e0b0ffbe94ff6f20e062",
+      "adapted": false
+    },
+    {
+      "path": ".github/skills/fluentui-blazor/references/THEMING.md",
+      "upstreamPath": "skills/fluentui-blazor/references/THEMING.md",
+      "upstreamSha256": "7644a29d6ffeed40b379b201c3602f1c9d5343defe85ba7dea745e122bf26852",
+      "localSha256": "7644a29d6ffeed40b379b201c3602f1c9d5343defe85ba7dea745e122bf26852",
+      "adapted": false
+    },
+    {
+      "path": ".github/skills/github-actions-hardening/SKILL.md",
+      "upstreamPath": "skills/github-actions-hardening/SKILL.md",
+      "upstreamSha256": "31a8e7483d978e6267941edefebbe42aaa946bb3d43c9095aa3db343d4a8ff06",
+      "localSha256": "31a8e7483d978e6267941edefebbe42aaa946bb3d43c9095aa3db343d4a8ff06",
+      "adapted": false
+    },
+    {
+      "path": ".github/skills/github-actions-hardening/references/injection.md",
+      "upstreamPath": "skills/github-actions-hardening/references/injection.md",
+      "upstreamSha256": "ebd6ef8d39ba6f1cd3dc13051e6ed4163d1d2ba36518cf0f7393836a211e58ff",
+      "localSha256": "ebd6ef8d39ba6f1cd3dc13051e6ed4163d1d2ba36518cf0f7393836a211e58ff",
+      "adapted": false
+    },
+    {
+      "path": ".github/skills/github-actions-hardening/references/permissions-and-tokens.md",
+      "upstreamPath": "skills/github-actions-hardening/references/permissions-and-tokens.md",
+      "upstreamSha256": "7272d00b20cf99c6fcbf34346f76730907c00701aef44bb9cfb7ab3eecac336b",
+      "localSha256": "7272d00b20cf99c6fcbf34346f76730907c00701aef44bb9cfb7ab3eecac336b",
+      "adapted": false
+    },
+    {
+      "path": ".github/skills/github-actions-hardening/references/report-format.md",
+      "upstreamPath": "skills/github-actions-hardening/references/report-format.md",
+      "upstreamSha256": "3ecd2442e173bc001f858747873349be7c6c77050470b87ae516647908b1e86e",
+      "localSha256": "3ecd2442e173bc001f858747873349be7c6c77050470b87ae516647908b1e86e",
+      "adapted": false
+    },
+    {
+      "path": ".github/skills/github-actions-hardening/references/supply-chain.md",
+      "upstreamPath": "skills/github-actions-hardening/references/supply-chain.md",
+      "upstreamSha256": "f66f613dbd732ce87c1e76b88208efde8feae3ffe5a3ab405cde4ce3df66f605",
+      "localSha256": "f66f613dbd732ce87c1e76b88208efde8feae3ffe5a3ab405cde4ce3df66f605",
+      "adapted": false
+    },
+    {
+      "path": ".github/skills/github-actions-hardening/references/triggers-and-privilege.md",
+      "upstreamPath": "skills/github-actions-hardening/references/triggers-and-privilege.md",
+      "upstreamSha256": "465f3f76517e9f5374a73e30f46cb47e1fe62ce9fd81f782808a3abbb2df2756",
+      "localSha256": "465f3f76517e9f5374a73e30f46cb47e1fe62ce9fd81f782808a3abbb2df2756",
+      "adapted": false
+    },
+    {
+      "path": ".github/skills/multi-stage-dockerfile/SKILL.md",
+      "upstreamPath": "skills/multi-stage-dockerfile/SKILL.md",
+      "upstreamSha256": "7dfea7d31f3744930cb07869e15a79f90dbd47d2ddc56d165715fbd257db9ba7",
+      "localSha256": "706938af18b172a1a9ae216802211976107e9a01621f5e1d01f4b1c67ef6144c",
+      "adapted": true
+    },
+    {
+      "path": ".github/skills/security-review/SKILL.md",
+      "upstreamPath": "skills/security-review/SKILL.md",
+      "upstreamSha256": "002392d88637b89e4cbc409a0531834970937f3b57c0b448a17e04b5ca6d356c",
+      "localSha256": "474b42498054190e3ced748e27210d867ba07d1da99820dcbe910216aa8051c6",
+      "adapted": true
+    },
+    {
+      "path": ".github/skills/security-review/references/language-patterns.md",
+      "upstreamPath": "skills/security-review/references/language-patterns.md",
+      "upstreamSha256": "ddfbcbb68b9d605789c85a168a274219f0ad86f5fc76b46b5332eb42f0c042b3",
+      "localSha256": "ddfbcbb68b9d605789c85a168a274219f0ad86f5fc76b46b5332eb42f0c042b3",
+      "adapted": false
+    },
+    {
+      "path": ".github/skills/security-review/references/report-format.md",
+      "upstreamPath": "skills/security-review/references/report-format.md",
+      "upstreamSha256": "688ef9f2862303527314eb17a090a72d512b907a685f5d1f122d6ebd5ae66db1",
+      "localSha256": "688ef9f2862303527314eb17a090a72d512b907a685f5d1f122d6ebd5ae66db1",
+      "adapted": false
+    },
+    {
+      "path": ".github/skills/security-review/references/secret-patterns.md",
+      "upstreamPath": "skills/security-review/references/secret-patterns.md",
+      "upstreamSha256": "38f84f60021490d785f33fc70f2ce784888d2a751781a881372e6862e7e11288",
+      "localSha256": "38f84f60021490d785f33fc70f2ce784888d2a751781a881372e6862e7e11288",
+      "adapted": false
+    },
+    {
+      "path": ".github/skills/security-review/references/vuln-categories.md",
+      "upstreamPath": "skills/security-review/references/vuln-categories.md",
+      "upstreamSha256": "d06159479bd92b9dcf3a2842e09f7712f1fd297c0bc9792fe20bc3cb69188df5",
+      "localSha256": "d06159479bd92b9dcf3a2842e09f7712f1fd297c0bc9792fe20bc3cb69188df5",
+      "adapted": false
+    },
+    {
+      "path": ".github/skills/security-review/references/vulnerable-packages.md",
+      "upstreamPath": "skills/security-review/references/vulnerable-packages.md",
+      "upstreamSha256": "8693a6a258bad18a8a1d0925bc1eae9c744071ff37a36b8f1da83adca93608af",
+      "localSha256": "8693a6a258bad18a8a1d0925bc1eae9c744071ff37a36b8f1da83adca93608af",
+      "adapted": false
+    },
+    {
+      "path": ".github/awesome-copilot/LICENSE",
+      "upstreamPath": "LICENSE",
+      "upstreamSha256": "e32449d23085399adc1222f7a17408b730550258e51627c153cb108ca9955823",
+      "localSha256": "e32449d23085399adc1222f7a17408b730550258e51627c153cb108ca9955823",
+      "adapted": false
+    }
+  ],
+  "localFiles": [
+    {
+      "path": ".github/copilot-instructions.md",
+      "sha256": "7401849ef0071987f2d6eeb2e23508e0f58b1d979807dc3d8288b840139d209b",
+      "kind": "local-integration"
+    },
+    {
+      "path": ".github/awesome-copilot/README.md",
+      "sha256": "63609048327c658b1c1a8f0fca021bb2e4b3a89498cc25ece5a3af6702b5efd1",
+      "kind": "local-integration"
+    },
+    {
+      "path": ".github/prompts/ekmmock-implement-milestone.prompt.md",
+      "sha256": "008bc626761ec5c65056a525743f3d72ccb62199f1c949eb799b035cf3daf9b7",
+      "kind": "local-integration"
+    },
+    {
+      "path": ".github/prompts/ekmmock-packaging.prompt.md",
+      "sha256": "5b03dd4b301e0844a1add115d363eb31b6391eb4bce4ae889a3ca906bd63bea0",
+      "kind": "local-integration"
+    },
+    {
+      "path": ".github/prompts/ekmmock-plan.prompt.md",
+      "sha256": "ca69247a9a1414820db762a594c43e605912a6e63267da99381d19b1a25ef95d",
+      "kind": "local-integration"
+    },
+    {
+      "path": ".github/prompts/ekmmock-record-decision.prompt.md",
+      "sha256": "b0a74a23b02f65bec0e9828fd0ae710274025bc231c0bb027887e3d7787419d8",
+      "kind": "local-integration"
+    },
+    {
+      "path": ".github/prompts/ekmmock-security-review.prompt.md",
+      "sha256": "4fac3ff756280730deec395196498448bc0a409acdea3c8b8038184134b74f3b",
+      "kind": "local-integration"
+    },
+    {
+      "path": ".github/prompts/ekmmock-test.prompt.md",
+      "sha256": "f14b6bd99891055d1a2d20c002a5bf897491b1dcc4ced55aed6e2d3cbe1c1759",
+      "kind": "local-integration"
+    }
+  ],
+  "promptDerivations": {
+    "ekmmock-packaging.prompt.md": [
+      "skills/multi-stage-dockerfile/SKILL.md",
+      "instructions/bicep-code-best-practices.instructions.md",
+      "skills/github-actions-hardening/SKILL.md"
+    ],
+    "ekmmock-plan.prompt.md": [
+      "agents/implementation-plan.agent.md",
+      "skills/create-implementation-plan/SKILL.md"
+    ],
+    "ekmmock-security-review.prompt.md": [
+      "agents/se-security-reviewer.agent.md",
+      "skills/security-review/SKILL.md"
+    ],
+    "ekmmock-record-decision.prompt.md": [
+      "skills/create-architectural-decision-record/SKILL.md"
+    ],
+    "ekmmock-implement-milestone.prompt.md": [
+      "agents/expert-dotnet-software-engineer.agent.md",
+      "skills/csharp-xunit/SKILL.md",
+      "skills/csharp-async/SKILL.md",
+      "skills/fluentui-blazor/SKILL.md"
+    ],
+    "ekmmock-test.prompt.md": [
+      "skills/csharp-xunit/SKILL.md"
+    ]
+  }
+}

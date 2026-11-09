@@ -1,0 +1,42 @@
+# .NET build and test output
+**/bin/
+**/obj/
+**/TestResults/
+**/BenchmarkDotNet.Artifacts/
+*.trx
+*.coverage
+*.coveragexml
+coverage/
+
+# IDE and user-specific files
+.vs/
+.vscode/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+**/appsettings.Development.json
+**/secrets.json
+*.pem
+*.key
+*.pfx
+*.p12
+*.p12.json
+
+# Runtime data, logs and local certificates
+/data/
+**/keystore.json
+**/namespaces.json
+**/mhsm-client.json
+*.jsonl
+*.log
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
