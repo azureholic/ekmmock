@@ -14,7 +14,7 @@
     <!-- In-process HTTP integration tests for the EKM API (M2). Matches the .NET 10.0.14 shared framework. -->
     <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.14" />
     <!-- Console (M5). Fluent UI Blazor v4 on purpose (the repository's Fluent UI skill documents v4; v5 is a different component model), see DECISIONS.md. -->
-    <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components" Version="4.14.5" />
+    <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components" Version="5.0.1" />
     <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components.Icons" Version="4.14.5" />
     <PackageVersion Include="Microsoft.Identity.Web" Version="4.18.0" />
     <!-- Console tests (M5): component tests and the real-browser smoke test. -->
