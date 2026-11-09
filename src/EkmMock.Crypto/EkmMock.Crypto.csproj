@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>EkmMock.Crypto</RootNamespace>
+    <AssemblyName>EkmMock.Crypto</AssemblyName>
+    <!-- Engine is a plain library: no ASP.NET Core / hosting dependency (spec section 16). -->
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="EkmMock.Crypto.Tests" />
+  </ItemGroup>
+
+</Project>
