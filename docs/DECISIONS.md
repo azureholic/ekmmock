@@ -1,5 +1,51 @@
 # Implementation decisions
 
+## Contents (by milestone)
+
+The sections below, in the order they were written (an index only; the sections themselves are unchanged).
+
+- [Console component library](#console-component-library)
+- [M1: AES Key Wrap (A256KW / A256KWP)](#m1-aes-key-wrap-a256kw--a256kwp)
+- [M1: Thread safety and instance pooling](#m1-thread-safety-and-instance-pooling)
+- [M1: Test stack (xUnit version)](#m1-test-stack-xunit-version)
+- [M1: Key store file format](#m1-key-store-file-format)
+- [M1: Master key provider](#m1-master-key-provider)
+- [M1: Engine error model, import gating and leak boundary](#m1-engine-error-model-import-gating-and-leak-boundary)
+- [M1: Namespaces](#m1-namespaces)
+- [M1: Build and repository conventions](#m1-build-and-repository-conventions)
+- [M2: EKM request pipeline and host composition](#m2-ekm-request-pipeline-and-host-composition)
+- [M2: EKM validation order (ordered-check table)](#m2-ekm-validation-order-ordered-check-table)
+- [M2: EKM error mapping (one place)](#m2-ekm-error-mapping-one-place)
+- [M2: Base64url (answer to open question 7)](#m2-base64url-answer-to-open-question-7)
+- [M2: JSON and secret handling](#m2-json-and-secret-handling)
+- [M2: Learn comparison](#m2-learn-comparison)
+- [M2: Not covered / deliberately skipped](#m2-not-covered--deliberately-skipped)
+- [M3: Where the code lives](#m3-where-the-code-lives)
+- [M3: TLS stack (spec 5.1)](#m3-tls-stack-spec-51)
+- [M3: Client certificate validation and authorization (spec 5.1)](#m3-client-certificate-validation-and-authorization-spec-51)
+- [M3: Port separation (spec 5.4)](#m3-port-separation-spec-54)
+- [M3: Connection capture (spec 7, 8.2, 14 test 21)](#m3-connection-capture-spec-7-82-14-test-21)
+- [M3: Server certificate hot reload (spec 5.3)](#m3-server-certificate-hot-reload-spec-53)
+- [M3: Learn comparison ("Configure networking and mTLS", read 9 November 2026)](#m3-learn-comparison-configure-networking-and-mtls-read-9-november-2026)
+- [M3: Not covered / deliberately skipped](#m3-not-covered--deliberately-skipped)
+- [M4: Where the code lives](#m4-where-the-code-lives)
+- [M4: Capture pipeline (spec 8.1, 8.3)](#m4-capture-pipeline-spec-81-83)
+- [M4: Secret handling in the inspector (spec 8.4)](#m4-secret-handling-in-the-inspector-spec-84)
+- [M4: Reveal, retention and audit (spec 8.4, 5.4)](#m4-reveal-retention-and-audit-spec-84-54)
+- [M4: Ring buffer, filters, feed (spec 8.3, 8.5)](#m4-ring-buffer-filters-feed-spec-83-85)
+- [M4: JSONL files (spec 8.3)](#m4-jsonl-files-spec-83)
+- [M4: Dashboard aggregates and contracts (spec 8.5)](#m4-dashboard-aggregates-and-contracts-spec-85)
+- [M4: KQL snippet (spec 8.5)](#m4-kql-snippet-spec-85)
+- [M4: Overhead benchmark (spec 8.3, 14 test 24)](#m4-overhead-benchmark-spec-83-14-test-24)
+- [M4: Tests](#m4-tests)
+- [M4: Not covered / deliberately skipped](#m4-not-covered--deliberately-skipped)
+- [M5: Console (Fluent UI Blazor, auth modes, endpoint separation)](#m5-console-fluent-ui-blazor-auth-modes-endpoint-separation)
+- [M6: Keys, namespaces and trust, certificates, playground, audit log, about](#m6-keys-namespaces-and-trust-certificates-playground-audit-log-about)
+- [M7: Limits, fault injection, Prometheus metrics, structured log levels](#m7-limits-fault-injection-prometheus-metrics-structured-log-levels)
+- [M8: `ekmmock` CLI, conformance suite, bench](#m8-ekmmock-cli-conformance-suite-bench)
+- [M9 (1/2): Docker image, compose, health check, container-safe console binding, CI](#m9-12-docker-image-compose-health-check-container-safe-console-binding-ci)
+- [M9 (2/2): Azure Bicep (VM and ACI), end-to-end script, README, RUNBOOK and RESULTS](#m9-22-azure-bicep-vm-and-aci-end-to-end-script-readme-runbook-and-results)
+
 ## Console component library
 
 - **Decision:** Use Microsoft Fluent UI Blazor
@@ -1149,5 +1195,81 @@ All with the image built from this code (417 MB), Docker Desktop 29.9.2 (Linux e
 - **Linux**: the Server project in the SDK container (`tests/run-server-tests-linux.ps1`): 1301 tests, 0 failed, 4 skipped (the Windows-only `WindowsKeyContainerTests`). A **simulation of the CI Linux job** (clean `sdk:10.0-noble` container, `dotnet build -c Release -warnaserror`, `dotnet test --solution ... --filter-not-trait "Category=Browser" --report-xunit-trx`, restoring through the corporate mirror via `RestoreSources`): **2175 tests, 2171 passed, 0 failed, 4 skipped** (all four projects, including the Cli and Console tests, which had never run on Linux before). The browser tests were not run on Linux.
 - **Flake runs**: the Server and Cli projects four times in a row (one full-solution run and three project runs) on the final code: **all 8 project runs green, no flake** (Server 1301/1297 passed/4 skipped each time, Cli 280/280 each time).
 - `dotnet build EkmMock.sln -warnaserror`: 0 warnings, 0 errors. `dotnet list package --vulnerable --include-transitive`: no vulnerable package in any project.
+
+## M9 (2/2): Azure Bicep (VM and ACI), end-to-end script, README, RUNBOOK and RESULTS
+
+Scope of this half: `deploy/azure/` (`vm.bicep`, `cloud-init.yaml`, `vm-setup.sh`, `aci.bicep`, example parameter files, `bicepconfig.json`, `e2e.sh`, a README), the root `README.md`, `docs/RUNBOOK.md`, `docs/RESULTS.md`, the consolidation of this file and of `OPEN-QUESTIONS.md` (status table, items 70 to 76), a CI job and tests.
+**Nothing was deployed and no Azure resource was created.** The templates were built, linted and formatted offline; Azure itself was never contacted except for reading the Microsoft Learn pages and running `az ... --help`.
+
+### Why two templates, and which is recommended
+The spec (11.3) asks for a VM (recommended) and ACI (alternative). The VM is recommended for a decisive reason: the console. On a VM it stays on the loopback (`ssh -L`) and needs no authentication system, and the container runs with the full spec 5.5 hardening. ACI cannot tunnel to a loopback port, so the console needs **Entra ID on a second public port**, ACI has no read-only root file system, no capability drop and no NSG on the group's public IP, and it cannot be known whether the non-root user can bind 443 there.
+So `aci.bicep` states these limits in its header and in the README and has a `runAsRoot` parameter (default `false`) as a last resort, instead of pretending ACI is equivalent. Both templates carry the comment that no TLS-terminating front end is used or supported, and a static test (`AzureDeploymentFilesTests`) rejects any front-end resource type.
+
+### `vm.bicep`
+- **Region**: a `location` parameter (default the resource group's). The reason is documented in the file and the README: the 250 ms budget includes the network distance between the Managed HSM pool and the proxy.
+- **Resources and API versions**: NSG, VNet + subnet (child resource, `parent:`), Standard static public IP with `dnsSettings.domainNameLabel`, NIC, VM (Ubuntu 24.04 LTS `Canonical:ubuntu-24_04-lts:server`, Gen2). The versions are the newest the Bicep 0.42.1 type library has (network 2025-05-01, compute 2025-04-01); `bicepconfig.json` turns on `use-recent-api-versions` and the secret rules as warnings/errors. Symbolic references only, `uniqueString` names with a prefix (`namePrefix`, 3 to 12 characters), lowerCamelCase, `@description` on every parameter and output, validation with `@minLength/@maxLength/@minValue`, `@allowed` only for `imageSource` and the disk type.
+- **NSG**: `allow-ekm-https-443` from `Internet`, `allow-ssh-from-operator` from `allowedSshSourceAddress`, an explicit `deny-all-other-inbound` (the default rules would deny too; the explicit one documents the intent and a test pins the three port values `443`, `22`, `*`). Port 8080 is not opened anywhere. **`allowedSshSourceAddress` is required and has no default; `*`, `0.0.0.0`, `0.0.0.0/0`, `::/0`, `Internet` and `Any` are rejected.** Bicep has no deployment-time assert and no regex decorator, so the guard is `substring(value, 0, open ? 100000 : length(value))`: for an open value ARM refuses the template ("The index and length parameters must refer to a location within the string"), otherwise it returns the value unchanged.
+  (First attempt: an unconditional out-of-range `substring` is a compile error, `BCP327`, because Bicep evaluates literals; the ternary on a parameter is not constant-folded. Verified with `bicep console`.)
+- **VM**: SSH key only (`disablePasswordAuthentication: true`, no admin password), `deleteOption: 'Delete'` on the OS disk, NIC and public IP (so that deleting the VM leaves nothing billed behind; the resource group delete removes the rest), managed OS disk with platform-managed key encryption (the Azure default; the parameter description says so), **encryption at host as an opt-in parameter** (`enableEncryptionAtHost`, default false, because it needs a subscription feature registration), **managed boot diagnostics** (`bootDiagnostics.enabled` without a storage account), tags (`application`, `purpose` plus a `tags` parameter). **Trusted launch is not configured**: whether `Standard_B2s` supports it could not be verified offline.
+  **No auto-shutdown**: it would take the EKM endpoint offline (Managed HSM sees a failing proxy); the cost note and the `az vm auto-shutdown` command are in the README and the header.
+- **Outputs** (no secrets, a test scans them): `fqdn`, `publicIpAddress`, `vmName`, `sshCommand`, `consoleTunnelCommand`, `fetchRootCaCommand`, `bootstrapLogCommand`.
+- **Fault injection** defaults to **on** in the VM (`enableFaultInjection`, default `true`) because the spec 15 scenarios need it and the console, the only place a rule can be created, is loopback-only on the VM; it defaults to **off** in ACI where the console port is internet-facing behind Entra ID.
+
+### cloud-init, the setup script and the image
+- **Design**: `cloud-init.yaml` only writes files (`write_files`, every one `encoding: b64`) and runs one command; the logic is in `vm-setup.sh`, a normal shell file that **shellcheck can check**, that can be sourced by tests (`main` runs only when executed) and that doubles as the on-VM tool (`bootstrap`, `run`, `upgrade`, `status`). Bicep replaces `@@TOKEN@@` placeholders with **base64 values** (`reduce()` over a token array) so that **no parameter can inject YAML or shell**: the script reads each value back from a small file with `cat`; a test checks that the tokens in the YAML and in the Bicep are the same set and that each is replaced by `base64(...)`.
+  `bool` values are written as `'true'`/`'false'` explicitly (ARM's `string(true)` is `True`, which a case-sensitive shell comparison would miss: found while rendering the document).
+- **Docker**: from Docker's official apt repository, **the signing key's primary fingerprint (`9DC858229FC7DD38854AE2D88D81803C0EBFCD88`) is checked and the install is refused on a mismatch**; the value was verified by downloading the live key and reading it with `gpg`. No version pin (Docker's repository carries the current release); the repository key is the verification. `docker.io` from Ubuntu's archive was rejected as an alternative because the spec asks for Docker's own repository.
+- **Image**: no image is published, so `imageSource` is `build` (default: clone `repoUrl` at `repoRef`, `docker build -f deploy/docker/Dockerfile`, with `REVISION` set to the commit; the URL must be `https://`, the ref must not start with `-`; **pin `repoRef` to a tag or a SHA for reproducibility**, the default `main` moves) or `pull` (your own registry, optional `registryUsername` and secure `registryPassword`, a login that is undone after the pull, no `latest`).
+- **Container**: `docker run`, not compose, because the VM needs one container and a script that recreates it. The flags are those of `compose.yaml` (`--read-only`, tmpfs `/tmp`, `--cap-drop ALL`, `no-new-privileges`, no `--user`, `--restart unless-stopped`, the image's health check), `--publish 443:8443` and **`--publish 127.0.0.1:8080:8080`** with `EKMMOCK_CONSOLE_CONTAINER_PUBLISH=true` and `Endpoints__Console__Url=https://0.0.0.0:8080`, the one documented opt-in (a test pins that no other publish form of 8080 exists in the script). The master key is a read-only bind-mounted file (`EKMMOCK_MASTER_KEY_FILE`).
+- **The master key on the VM**: written from the `@secure()` parameter by cloud-init to `/opt/ekmmock/secrets/master.key` (mode 0400, root-only directory), `chown`ed to uid 1654 by the script. **Decided not to scrub** the root-only copies of the custom data that cloud-init and the Azure agent keep: deleting platform files could break the agent, and root on the VM (or Azure RBAC rights to run commands on it) can read the key file anyway. The residual copy is documented (OPEN-QUESTIONS 72, RUNBOOK section 3, template header).
+- **TLS certificate and the SAN flow**: the FQDN is computed in the template before the public IP exists (`<dnsLabel>.<location>.cloudapp.azure.com`, public clouds only), written to `/opt/ekmmock/config/fqdn`, and on first boot the image's own CLI (`docker run --entrypoint ekmmock`, same hardening) creates a test root CA and a server certificate with **SAN = the FQDN plus `localhost` and `127.0.0.1`** (the extra SANs let the console, reached through the tunnel on the same certificate, verify against `root-ca.pem`; Managed HSM only checks the host it was given). The server certificate and key are copied to `/data/tls` (the server persists an uploaded certificate over the files it started with, so `pki/` keeps the CLI's originals), the public `root-ca.pem` is copied there too (the console's Certificates page serves it from `/data/tls`, only while it issued the served certificate).
+  **The CA's private key stays in `/data/pki/root-ca.key` (mode 0600, container user) and never leaves the VM**: it allows re-issuing under the same root, which is what keeps the root registered with Managed HSM valid (resolving open question 41 for the VM flow); the README says to delete it if that ability is unwanted. Bring-your-own certificate: `generateTestCertificate=false`, copy the files, run `ekmmock-vm.sh run`.
+- Tests: the rendering of the document was checked with a script (the YAML parses, the files decode, the permissions are as intended); `registry_host` and `cfg` were run in a shell; shellcheck is clean at `style` severity.
+
+### `aci.bicep`
+- EKM endpoint on **443 inside the container** (`var ekmPort = 443`, `Endpoints__Ekm__Url=https://0.0.0.0:443`), the console on a parameter `consolePort` (default **8443**, 1024 or above so that it cannot collide with 443) with `Console__Auth=EntraId` and the tenant, client, object ids and group as parameters; `EKMMOCK_CONSOLE_CONTAINER_PUBLISH` is never set (it is refused with `EntraId` anyway) and a test pins that.
+- **Secrets**: the master key and the Entra client secret are `secureValue` environment variables, the TLS private key is a secure parameter delivered in a read-only **secret volume**, the registry credentials a secure object; none is an output. The Azure Files key is read with `listKeys()` inside the template (an SMB mount needs it) and is never an output (a test rejects `listKeys` and `storageAccountKey` in outputs).
+- **Certificate**: the FQDN `<dnsNameLabel>.<location>.azurecontainer.io` must be known before the deployment (it is the SAN), so the DNS label scope is the **legacy/unsecure** one: the secure scopes (`autoGeneratedDomainNameLabelScope`) insert a hash that cannot be known in advance; the subdomain-takeover trade-off is documented in the file. (A first draft used `dnsNameLabelReusePolicy`, which the type library does not have: the compiler said so.)
+- **`runAsRoot`** (default `false`): sets `securityContext.runAsUser/runAsGroup` to 0. The Bicep type accepts it; whether ACI honours it outside confidential containers is unknown (OPEN-QUESTIONS 73). The fallbacks are listed in order: the VM, `runAsRoot`, a derived image with `USER 0`.
+- Storage account: Standard_LRS, TLS 1.2 minimum, no public blob access, shared key access **on** (the mount needs it), a 5 GiB SMB share. No network policy beyond what ACI allows (a container group's public IP cannot be behind an NSG).
+
+### Secret handling in the infrastructure code
+`@secure()` + `@minLength(44)/@maxLength(44)` on the master key (a 32-byte base64 value), secrets never in outputs, never in parameter files, never on the command line: the example `.bicepparam` files read them with `readEnvironmentVariable()` (and `loadTextContent(readEnvironmentVariable(...))` for the ACI certificate files), `az.getSecret()` is documented as the Key Vault alternative. The examples use `<REPLACE-...>` placeholders; because `bicep build-params` **validates the length decorators**, the GUID placeholders are exactly 36 characters long
+(the check found that the first placeholders were too long and too short). `.gitignore` ignores `deploy/azure/*.bicepparam` except `*.example.bicepparam`, `*.parameters.json`, transient ARM JSON (`deploy/azure/*.json` except `bicepconfig.json`), `e2e-work/`, `root-ca.pem` and `mhsm-client.json`; `.gitattributes` forces LF for `deploy/azure/**`. A scan test (`AzureDeploymentFilesTests`) rejects private-key headers, 32-byte base64 values, long base64 blobs, subscription paths, real-looking GUIDs (only the all-zero placeholder and the spec's two request-context examples) and literal `cloudapp.azure.com` / `azurecontainer.io` host names in `deploy/azure`, the README, RUNBOOK and RESULTS.
+**Line endings**: files created by the tooling here were CRLF in some cases; a CRLF `#cloud-config` header would not be detected, so every file in `deploy/azure` is LF and a test enforces it.
+
+### `e2e.sh` (spec 15)
+- **Structure**: `set -euo pipefail`, bash 5 (`EPOCHREALTIME`), `--help`, global options mirrored by environment variables, subcommands in the spec's order (`prereqs`, `trust`, `connect`, `keys`, `roundtrip`, `all`) plus one per scenario (`baseline`, `sweep`, `key-disable`, `key-destroy`, `offline`, `observe`) and `cleanup`. **`--dry-run`** prints every command with a leading `+` (quoted so it can be pasted), executes nothing and writes nothing (not even the work folder); it was run for every subcommand.
+- **Only commands that exist**: the `az keyvault ekm-connection` group and the flags used (`create --hsm-name --host --server-ca-certificate [--path-prefix]`, `update`, `check`, `show`, `delete`, `certificate show`), `az keyvault key create --external-key-id`, `az rest --resource https://managedhsm.azure.net ... api-version=7.5` were taken from `--help` of the installed CLI (2.92.0) and Learn; differences are in OPEN-QUESTIONS 71. `connect` uses `update` when `ekm-connection show` finds a connection (a pool has one), `keys` skips an existing reference (the external id is immutable per version, a repeat would create a new version).
+- **The DEK**: a random 32 bytes from `openssl rand`, base64url without padding (the encoding the API wants) into a `0600` request body file that is **deleted on exit** (a trap), compared after unwrap by bytes; the output shows only the length and the SHA-256 fingerprint prefix of 12 hex characters, **the same fingerprint the console shows**, so the two sides can be matched; a test pins that no `say`/`echo` line mentions the DEK variables.
+- **Console access**: `ekmmock` through the SSH tunnel (`--console https://127.0.0.1:8080`, trusting `root-ca.pem`, whose SAN includes `127.0.0.1`, or `--insecure-console` which the CLI itself restricts to loopback); fault rules for delays the CLI presets do not offer (50, 150, 240, 300 ms) are created with `curl` against `POST /api/console/faults` (the headers, so a bearer token, are never echoed); a trap removes every rule the script created.
+  A path prefix creates a namespace named after it (`/contoso/prod` becomes `contoso-prod`) and trusts the Managed HSM identity there. For ACI, `EKMMOCK_CONSOLE_ARGS` and `EKMMOCK_CONSOLE_TOKEN` pass the Entra options.
+- **Scenarios**: `baseline` (1,000 sequential `az rest` calls, each starts an `az` process, so the client time is not proxy latency; the EkmMock side is saved from `/api/console/dashboard` and `/api/console/export`, the Azure-side KQL is printed or run when `LAW_ID` is set), `sweep` (a rule per delay, `SWEEP_CALLS` unwraps each, the exchanges saved), `key-disable`, `key-destroy` (**a throw-away key, never the real ones**), `offline` (HSM offline, then blackhole with `timeout 300`), `observe` (the inspector export and a grep summary of algorithm, byte sizes, HTTP version, ALPN, padding), `cleanup` (needs `--yes`; deletes the key references, the connection, the EkmMock keys; prints the group delete command rather than guessing the resource group).
+  Every scenario writes a snippet to `e2e-work/results/<scenario>.md`.
+- **Verified here**: `bash -n`, shellcheck (`koalaman/shellcheck:stable`, `-x -S style`, clean), `--dry-run` of all subcommands, and the **local logic against a test double of `az`** (an identity wrap/unwrap): two PASS lines, the failure path (a changed unwrap result: FAIL, exit 1), no plaintext files left, nothing secret-looking in the work folder. **Not verified**: every call to Azure and to a real console (see OPEN-QUESTIONS 74).
+
+### Documentation
+- `README.md` (root): what and why with the disclaimer, a Mermaid architecture diagram, features, quick start, the configuration reference, security notes (trust model, the limits of managed memory (spec 5.2), the container-publish opt-in and its residual risk, platform notes), CLI, deployment options, testing, the benchmark baseline **read from `docs/benchmarks/*.json`** with machine information and the stall and open-loop caveats, limitations and the licence note (**no licence file exists; none was invented**).
+- `docs/RUNBOOK.md` (spec 9): operation, master key custody, certificate renewal, trust after a rotation (CN and root CA), the handshake-failure reason table (the labels of `HandshakeFailureReasons`), the **KQL quoted from the Learn quickstart and logging article** and the repository's `KqlSnippets` output, correlation of `correlation_id`, diagnostic settings (AuditEvent) and the `EkmProxyAvailability` metric, latency triage, the fault playbook, Prometheus, VM/container/ACI operations, a troubleshooting matrix adapted from Learn, the clean-up order and destructive-action warnings.
+- `docs/RESULTS.md`: a **measured** part (totals, conformance, container verification, CI, benchmarks, offline validation), the **spec 14 matrix** (27 rows) with test names that a test (`DocumentationTests`) checks against the sources, and the **Azure template** where every `Measured` cell says `NOT YET MEASURED` (also enforced by a test) and `Expected` is labelled as an expectation. `DocumentationTests` also checks every relative link and anchor of the documentation.
+- `docs/OPEN-QUESTIONS.md`: a status table at the top (open / answered / not verifiable offline) and items 70 to 76. This file: the table of contents at the top.
+
+### CI
+A fifth job, `azure-templates` (`ubuntu-latest`, same hardening as the others: SHA-pinned checkout without persisted credentials, `contents: read`, a timeout, no `${{ }}` in the script): `az bicep install`, `az bicep build` and `az bicep lint` of both templates **failing on any diagnostic line**, `bicep build-params` of the example files with dummy values, `bash -n` and shellcheck of both scripts, and `e2e.sh --dry-run` of every subcommand. It needs no Azure login. `DeploymentFilesTests` now expects five jobs.
+The job installs the latest Bicep, so a new Bicep release can add diagnostics (OPEN-QUESTIONS 76).
+
+### M9 (2/2): Not covered / deliberately skipped
+- No deployment, no `what-if`/`validate` (they need a subscription and an existing resource group: not run, not faked); no ACI, VM or Managed HSM run; no Private Link IaC (spec 11.4); no managed identity, Key Vault or Log Analytics resources in the templates (the diagnostic setting of the Managed HSM is the user's, documented in the RUNBOOK); no trusted launch; no auto-shutdown; no master-key rotation (documented as unsupported).
+- The `e2e.sh` role check and the output shapes it assumes are best effort; the Windows (PowerShell) twin of the script was not written (bash on Linux, macOS with bash 5, or WSL).
+
+### M9 (2/2): Tests and results
+
+- **Totals** (Windows, `dotnet test EkmMock.sln` including the browser tests, 9 November 2026): **2206 tests, 2202 passed, 0 failed, 4 skipped** (the four `CipherPolicyTests.Linux_*`; was 2188). Per project: Crypto 308, Server 1319, Cli 280, Console 299. 18 new tests: `AzureDeploymentFilesTests` (no committed secrets or environment values; secrets are `@secure()` and never outputs; the master key parameter is exactly 44 characters; no TLS-terminating front end; the NSG opens only 443, the operator's SSH and nothing for 8080; the guard values of the SSH source;
+  the VM script publishes the console on `127.0.0.1` only with the hardening flags and the verified Docker key fingerprint; the cloud-init tokens equal the Bicep tokens and every file is `encoding: b64`; the ACI template listens on 443 in the container, uses EntraId and secure values and defaults to non-root; no `:latest`; LF-only files; the `e2e.sh` rules) and `DocumentationTests` (every relative link and anchor of the documentation resolves; the RESULTS matrix names only existing tests and has all 27 rows with an allowed status; no Azure cell of RESULTS says anything but `NOT YET MEASURED`).
+  Mutation check: a broken link, a broken anchor and a non-existent test name in RESULTS each made `DocumentationTests` fail.
+- `dotnet build EkmMock.sln -warnaserror`: 0 warnings. `dotnet list package --vulnerable --include-transitive`: clean for all 9 projects.
+- Offline validation of the Azure artefacts: see [RESULTS](RESULTS.md) section 1.6 (Bicep build/lint/format and `build-params`, `bash -n`, shellcheck, `e2e.sh --dry-run` of every subcommand, the `az` test double, the cloud-init rendering, the live Docker key fingerprint).
+- **Not verified**: any deployment, the VM boot flow, ACI, `e2e.sh` against a real Managed HSM, `az deployment group validate/what-if` (OPEN-QUESTIONS 72 to 74).
+
 
 

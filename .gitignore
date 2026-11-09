@@ -42,3 +42,13 @@ coverage/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Azure deployment: local parameter files, transient ARM JSON (bicep build output) and the e2e work folder. The committed examples are *.example.bicepparam.
+/deploy/azure/*.bicepparam
+!/deploy/azure/*.example.bicepparam
+/deploy/azure/*.parameters.json
+/deploy/azure/*.json
+!/deploy/azure/bicepconfig.json
+e2e-work/
+root-ca.pem
+mhsm-client.json

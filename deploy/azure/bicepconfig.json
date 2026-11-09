@@ -1,0 +1,39 @@
+{
+  "analyzers": {
+    "core": {
+      "rules": {
+        "use-recent-api-versions": {
+          "level": "warning",
+          "maxAllowedAgeInDays": 730
+        },
+        "use-secure-value-for-secure-inputs": {
+          "level": "error"
+        },
+        "outputs-should-not-contain-secrets": {
+          "level": "error"
+        },
+        "secure-secrets-in-params": {
+          "level": "error"
+        },
+        "protect-commandtoexecute-secrets": {
+          "level": "error"
+        },
+        "no-hardcoded-env-urls": {
+          "level": "warning"
+        },
+        "no-unused-params": {
+          "level": "warning"
+        },
+        "no-unused-vars": {
+          "level": "warning"
+        },
+        "prefer-interpolation": {
+          "level": "warning"
+        },
+        "simplify-interpolation": {
+          "level": "warning"
+        }
+      }
+    }
+  }
+}

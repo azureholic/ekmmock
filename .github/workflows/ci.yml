@@ -259,3 +259,58 @@ jobs:
       - name: Stop the stack and delete its volume
         if: ${{ always() }}
         run: docker compose -f deploy/docker/compose.dev.yaml down -v
+
+  # Spec 13 M9 / 11.3: offline validation of the Azure deployment files. Nothing is deployed and there is no Azure login or secret: Bicep build and lint of both templates (any diagnostic fails
+  # the job), the example parameter files, shellcheck of the shell scripts and a dry run of every e2e.sh command.
+  azure-templates:
+    name: Azure templates (Bicep build and lint, shell checks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build and lint both Bicep templates (zero diagnostics)
+        run: |
+          set -uo pipefail
+          az bicep install
+          az bicep version
+          status=0
+          for template in vm aci; do
+            az bicep build --file "deploy/azure/${template}.bicep" --stdout >/dev/null || status=1
+            diagnostics=$(az bicep lint --file "deploy/azure/${template}.bicep" 2>&1) || status=1
+            printf '%s\n' "$diagnostics"
+            if printf '%s\n' "$diagnostics" | grep -Eq ' : (Warning|Error) '; then
+              echo "::error::deploy/azure/${template}.bicep has Bicep diagnostics (see the step output)."
+              status=1
+            fi
+          done
+          exit "$status"
+
+      - name: Build the example parameter files (placeholders only, dummy secrets)
+        run: |
+          set -euo pipefail
+          # The values are generated here and only exist in this step's environment; the example files read them with readEnvironmentVariable().
+          EKMMOCK_MASTER_KEY="$(openssl rand -base64 32)"
+          EKMMOCK_ENTRA_CLIENT_SECRET="$(openssl rand -hex 16)"
+          printf 'placeholder %0200d\n' 0 > deploy/azure/ci-placeholder.pem
+          export EKMMOCK_MASTER_KEY EKMMOCK_ENTRA_CLIENT_SECRET
+          export EKMMOCK_SERVER_CERT_FILE=ci-placeholder.pem EKMMOCK_SERVER_KEY_FILE=ci-placeholder.pem
+          for example in vm aci; do
+            az bicep build-params --file "deploy/azure/${example}.example.bicepparam" --stdout >/dev/null
+          done
+          rm -f deploy/azure/ci-placeholder.pem
+
+      - name: Shell checks (bash -n, shellcheck) and a dry run of every e2e.sh command
+        run: |
+          set -euo pipefail
+          bash -n deploy/azure/e2e.sh deploy/azure/vm-setup.sh
+          shellcheck -x -S style deploy/azure/e2e.sh deploy/azure/vm-setup.sh
+          for command in prereqs trust connect keys roundtrip baseline sweep key-disable key-destroy offline observe cleanup; do
+            bash deploy/azure/e2e.sh --dry-run --hsm contoso-hsm --fqdn ekm.example.test "$command" >/dev/null
+          done
+          bash deploy/azure/e2e.sh --dry-run --hsm contoso-hsm --fqdn ekm.example.test --path-prefix /contoso/prod all >/dev/null

@@ -3,6 +3,92 @@
 Seeded from spec section 17. If the Microsoft Learn EKM Proxy API reference conflicts with the spec, add the discrepancy here
 and stop the affected work.
 
+## Status summary
+
+One line per question; the entries below are the source of truth. **open** = undecided or unknown and answerable locally; **answered** = answered or resolved (the entry says how);
+**not verifiable offline** = can only be answered with a real Azure Managed HSM, Entra tenant, ACI or Azure VM (see [RESULTS](RESULTS.md) section 3). Status as of M9 part 2.
+
+| Id | Topic | Status |
+|---|---|---|
+| 1 | `info` `api_version` accepted by `check` | not verifiable offline |
+| 2 | Padded or unpadded base64url from Managed HSM | not verifiable offline |
+| 3 | Metadata for a disabled key | not verifiable offline (choice implemented) |
+| 4 | `alg` and DEK sizes Azure services send | not verifiable offline |
+| 5 | HTTP version and connection reuse of Managed HSM | not verifiable offline |
+| 6 | Non-root binding of port 443 (ACI) | answered for Docker; not verifiable offline for ACI |
+| 7 | Base64Url padding in .NET | answered |
+| 8 | AES key wrap API in .NET | answered |
+| 9 | Error code for 405 | open |
+| 10 | Body on `info` | not verifiable offline |
+| 11 | Exact `Content-Type` Managed HSM sends | not verifiable offline |
+| 12 | `api-version` strictness | open |
+| 13 | Optional context fields of a wrong type | open |
+| 14 | Upper DEK size for A256KW | open |
+| 15 | Prefix shadows a same-named key in `_default` | open |
+| 16 | Percent-encoded `/` in a key name | answered |
+| 17 | No certificate: handshake failure or JSON 401 | open (confirm with Azure) |
+| 18 | `caCertificates` always self-signed roots? | not verifiable offline |
+| 19 | Intermediates and `clientAuth` EKU from Managed HSM | not verifiable offline |
+| 20 | Expired client certificate: 401 or handshake | open |
+| 21 | Cipher-suite enforcement on Windows | open |
+| 22 | 404 versus 401 for unknown prefixes | open |
+| 23 | TLS session resumption disabled | open |
+| 24 | Chunked body of exactly 16 KiB | open |
+| 25 | Windows CA-store side effect | open |
+| 26 | `AzureDiagnostics` column for `correlation_id` | not verifiable offline |
+| 27 | What Managed HSM really sends is observable | not verifiable offline |
+| 28 | Fingerprints of low-entropy secrets | open |
+| 29 | `EnableBuffering` versus stream wrapping | open |
+| 30 | Bodies above 16 KiB not captured | open |
+| 31 | Resumption in the inspector | open |
+| 32 | 150/250 ms log levels | answered (M7) |
+| 33 | Docker port mapping versus loopback bind | answered (deliberate deviation, M9) |
+| 34 | Entra sign-in against a real tenant | not verifiable offline |
+| 35 | Group-claim overage | open |
+| 36 | Circuit identity not revalidated | open |
+| 37 | Fluent UI Blazor v4 versus v5 | open |
+| 38 | CLI authentication against `EntraId` | answered (M8; real tenant is 53) |
+| 39 | No file upload for trust import | open |
+| 40 | Console test CA is per process | open |
+| 41 | Generated root CA cannot re-issue | open |
+| 42 | `az` commands shown by the console not run | not verifiable offline (see 71) |
+| 43 | Self-test cases only for keys at startup | open |
+| 44 | Toast placement | open |
+| 45 | `--dev` without sample keys | answered (see 60) |
+| 46 | Windows CNG key file leak in tests | open (reduced) |
+| 47 | Handshake flake under load | open |
+| 48 | Managed HSM behaviour on 429, 5xx, blackhole, close | not verifiable offline |
+| 49 | Injected delay and the deadline | open |
+| 50 | Budget metric counts the deadline | open |
+| 51 | Faults answer before authentication | open |
+| 52 | `HttpClient` early responses | open |
+| 53 | Entra bearer path against a real tenant | not verifiable offline |
+| 54 | Log lines can be dropped under overload | open |
+| 55 | ~10 s stalls at 30k req/s | open (re-measure off-box) |
+| 56 | Test PKI pollutes the Windows store | open |
+| 57 | Two-phase persistence test | answered (by design) |
+| 58 | Windows ACL for owner-only files | open |
+| 59 | No disk token cache in the CLI | open |
+| 60 | Fresh `--dev` has no sample keys | answered (dev compose seeds them) |
+| 61 | Image cannot be built from nuget.org on the dev network | open (CI path verified) |
+| 62 | Health check does not verify the console certificate | open |
+| 63 | Data Protection keys unencrypted | open |
+| 64 | Server GC and R2R on the 2-vCPU VM | not verifiable offline |
+| 65 | Browser tests need their own CI job | open |
+| 66 | No licence declared | open (owner decision) |
+| 67 | Source address of loopback-published connections | open |
+| 68 | Shared-runner timing | open |
+| 69 | `docker compose up --wait` not used | answered |
+| 70 | `EkmProxyOperation` versus the real operation names | answered (Learn logging article used) |
+| 71 | `az keyvault ekm-connection` availability and syntax | answered for the CLI surface; behaviour not verifiable offline |
+| 72 | VM boot flow (cloud-init, Docker, certificate generation) | not verifiable offline |
+| 73 | ACI: 443 as non-root, SMB semantics, `runAsUser`, secret volume | not verifiable offline |
+| 74 | `e2e.sh` against a real Managed HSM | not verifiable offline |
+| 75 | `DurationMs` in `AzureDiagnostics` | not verifiable offline |
+| 76 | Bicep type library versus the newest GA API versions | open |
+
+## Questions
+
 1. `api_version` in the `info` response: documented API version is `0.1-preview`, Learn examples show `"1.0"`. Confirm what
    `az keyvault ekm-connection check` accepts (watch it in the inspector).
 2. Does Managed HSM send padded or unpadded base64url? EkmMock accepts both; confirm from captured traffic.
@@ -26,6 +112,7 @@ and stop the affected work.
      (D) `--sysctl net.ipv4.ip_unprivileged_port_start=443` (or 0): works. (E) (C) plus `no-new-privileges`: denied. A `setcap cap_net_bind_service` on the dotnet host binary would also be defeated by `no-new-privileges`, so it is not used.
      **So on Docker (the VM model) the non-root user can bind 443 by default, and the documented fallbacks are, in order: keep 8443 inside and map `443:8443` (the compose default and what the spec's VM flow does), set the sysctl (`--sysctl` / compose `sysctls:`), and as the last resort run as root in ACI only (never the default).**
      **Still unknown: ACI.** ACI exposes the container port directly (no remapping) and its sandbox's `ip_unprivileged_port_start` could not be tested from here. Test with the real image in ACI (`Endpoints__Ekm__Url=https://0.0.0.0:443`, non-root): if it logs `Permission denied` the sysctl cannot be set in ACI and the alternatives are the VM, or `--user 0` / `securityContext` root in ACI only for that deployment, documented as a deviation from spec 5.5.
+   - **Status (M9 part 2):** `deploy/azure/aci.bicep` implements exactly this (EKM on 443 inside the container, `runAsRoot` parameter default `false`), but it was **never deployed**; see 73 for everything about ACI that is still unverified. The VM template (`vm.bicep`) keeps `443:8443` and needs no privileged port inside the container.
 7. Does `System.Buffers.Text.Base64Url` decoding accept padding in the .NET version used? If not, normalise before decoding.
    - **Status:** answered in M2 (measured on .NET 10.0.14, pinned by the `OQ7_*` tests in `Base64UrlTests`). `Base64Url.DecodeFromUtf8`
      and `DecodeFromChars` **accept padded input** (`AQ==`, `AQA=`) as well as unpadded, reject `+` `/` and malformed padding, and reject
@@ -192,3 +279,21 @@ supported" (`OperationNotAllowed` exists in the code but nothing emits it yet).
 67. **Source address seen by the container for loopback-published connections is not recorded (M9, see 33).**
 68. **Shared-runner timing (M9).** On the GitHub Windows runner one console test (first mutual-TLS handshake in a bUnit test) exceeded a 5 s wait once; the wait is now 20 s. The inspector overhead benchmark (p99 < 1 ms) passed on both runners, but on shared CI hardware it can fail through noise; if it does, rerun before suspecting the code.
 69. **`docker compose up --wait` is not used (M9).** Some Compose versions treat an exited one-shot container as an error with `--wait` (seen on the GitHub runner; Compose 5.6.1 locally accepts it). The make target and the PowerShell script wait explicitly instead.
+
+## Added during M9 (2/2)
+
+70. **Spec and Learn quickstart say `EkmProxyOperation`; the Learn logging article never uses that name.** Spec section 9/15 and the Learn quickstart ("View audit logs": "Every EKM Proxy call produces an `EkmProxyOperation` entry in your Managed HSM diagnostic logs") speak of an `EkmProxyOperation` record, but the query in the same quickstart and the "Logging and monitoring for Managed HSM external key management" article use the table
+    `AzureDiagnostics` with `ResourceProvider == "MICROSOFT.KEYVAULT"` and `OperationName` of `EkmGetProxyInfo`, `EkmGetKeyMetadata`, `EkmWrapKey` or `EkmUnwrapKey` (the logging article lists exactly these four). `EkmProxyOperation` is not a value anywhere in the queries. The RUNBOOK, `e2e.sh` and the inspector's `KqlSnippets` use the four real operation names.
+    The category to enable on the Managed HSM diagnostic setting is **AuditEvent**. Confirm with real rows whether any record is literally named `EkmProxyOperation`.
+71. **`az keyvault ekm-connection`: availability, syntax and discrepancies (checked with `--help` of Azure CLI 2.92.0, not run against Azure).** The group exists in the core CLI (no extension needed here) with `create`, `check`, `show`, `update`, `delete` and `certificate show`. It matches the spec: `create --hsm-name --host --server-ca-certificate [--path-prefix]`, `check --hsm-name`, `certificate show --hsm-name`, `delete --hsm-name`; `key create --external-key-id` exists too.
+    Differences and additions: (a) `--path-prefix` must start with `/`; (b) `--host` accepts `FQDN` or `FQDN:port` (default 443; Learn says only 443 is supported); (c) `--server-ca-certificate` takes a PEM chain file or several files (PEM or DER); (d) there is a `--server-cn/--server-subject-common-name` option (for the Private Link name, not in the spec); (e) Learn's troubleshooting page runs `az keyvault ekm-connection list`, which 2.92.0 does **not** have (`show` is used instead);
+    (f) the Learn quickstart's AES `wrapkey` example uses `A256KW` (as the spec and `e2e.sh` do) and says RSA-OAEP-256 for RSA. Learn's `check` example output shows `"apiVersion": "1.0"` (open question 1). The role names `Managed HSM EKM Administrator` and `Managed HSM Crypto User` come from Learn; the shape of `az keyvault role definition list` / `assignment list` output that `e2e.sh prereqs` queries is assumed (best effort, warnings only).
+72. **The VM boot flow was never run (M9 part 2).** `vm.bicep` was built and linted and the cloud-init document renders and parses; `vm-setup.sh` passes `bash -n` and shellcheck and its helpers ran in a shell. Not run on a fresh Ubuntu 24.04 VM: the apt-based Docker install (including the key fingerprint check, which was verified against the live key file), `docker build` of the image on a 2-vCPU B2s (a few minutes, needs nuget.org), `ekmmock certs` from the image on first boot, the bind-mounted master key readable by uid 1654, and the container reaching `ready`.
+    Also unverified: that `Standard_B2s` is available in the chosen region, and that a private registry login works. The master key also exists in the root-only cloud-init and Azure agent copies of the custom data on the OS disk (a documented residual copy, not scrubbed: scrubbing platform files could break the agent, and root on the VM can read the key file anyway).
+73. **ACI (M9 part 2; extends question 6).** Unverified in Azure: (a) the non-root user binding 443 (`Permission denied` fallback: VM, or `runAsRoot=true`); (b) whether ACI honours `securityContext.runAsUser`/`runAsGroup` outside confidential containers (the Bicep type allows it; the service behaviour is unknown); (c) the Azure Files SMB mount: ownership and `chmod` for uid 1654 (the key store and the Data Protection keys set file modes, which may fail on SMB), and
+    file-lock/atomic-rename behaviour of the key store writes on SMB; (d) that a secret volume's files are readable by a non-root user; (e) the Entra sign-in on `https://<fqdn>:8443` with a certificate whose SAN is the container FQDN. Known by design: no read-only root file system, no capability drop, no NSG on the group's public IP, the console is internet-facing behind Entra ID, a read-only certificate volume (renew by redeploying),
+    and the legacy DNS label scope (needed so that the FQDN, hence the certificate SAN, is known before the deployment; the secure scopes add a hash). The EKM listener port is a template constant (443); the console port is a parameter (default 8443).
+74. **`e2e.sh` was never run against a real Managed HSM (M9 part 2).** Verified: `bash -n`, shellcheck, `--dry-run` of every command, and the local logic (body files, base64url, fingerprints, comparison, failure exit code, deletion of plaintext files) against a test double of `az`. Not verified: every call to Azure and to the console through the tunnel, the role check, `az rest` output (`--query value --output tsv`), how Managed HSM reports a 403/404/429/blackhole, and the length of the 1,000-call baseline (each call starts an `az` process, so client wall time says nothing about proxy latency).
+    The script is written so that a result is recorded only by measurement: each scenario appends a snippet to `e2e-work/results/`, and `docs/RESULTS.md` section 3 keeps `NOT YET MEASURED` until then.
+75. **`DurationMs` may be empty or may not include the external HSM call (Learn).** The "Measure latency distribution" query in the logging article says that if `DurationMs` is not populated in the workspace, correlate with proxy logs instead, and that proxy logs capture end-to-end latency "including the external HSM call that `DurationMs` doesn't include". The baseline comparison of spec 15 (Azure-side latency versus EkmMock server time) may therefore not be possible with `DurationMs` alone: the difference may need the proxy-side time from the inspector export.
+76. **Bicep API versions are those of the Bicep 0.42.1 type library (M9 part 2).** Network 2025-05-01, compute 2025-04-01, Azure Container Instances 2025-09-01, storage 2025-01-01: the newest the linter's `use-recent-api-versions` rule accepts. A newer GA version may exist in Azure that this Bicep version does not know. The CI job installs the *latest* Bicep through `az bicep install`, so a later Bicep release can turn the zero-warning check red (new analyzer rules or an API version that has aged past the rule's 730 days): then upgrade the API version or the rule level in `deploy/azure/bicepconfig.json`.

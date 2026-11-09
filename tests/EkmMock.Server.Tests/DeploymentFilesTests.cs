@@ -211,7 +211,7 @@ public sealed partial class DeploymentFilesTests
         // Every job: a timeout and its own minimal permissions; every checkout without persisted credentials.
         var jobsSection = text[(text.IndexOf("\njobs:", StringComparison.Ordinal) + 1)..];
         var jobs = Regex.Matches(jobsSection, @"(?m)^  [a-z-]+:\s*$").Count;
-        jobs.ShouldBe(4);
+        jobs.ShouldBe(5);
         Regex.Matches(text, @"(?m)^    timeout-minutes:").Count.ShouldBe(jobs);
         Regex.Matches(text, @"(?m)^    permissions:\s*\n      contents: read").Count.ShouldBe(jobs);
         var checkouts = Regex.Matches(text, @"uses: actions/checkout@").Count;

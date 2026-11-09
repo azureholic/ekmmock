@@ -1,0 +1,68 @@
+#cloud-config
+# EkmMock VM first-boot configuration (deploy/azure/vm.bicep). Bicep replaces every @@NAME@@ token below with a BASE64 value, so no parameter value can break out of this
+# YAML or be interpreted by a shell: files are written with encoding b64 and read back by deploy/azure/vm-setup.sh.
+#
+# What happens: the files below are written, then vm-setup.sh bootstrap installs Docker from Docker's own apt repository (signing key fingerprint verified), obtains the EkmMock image
+# (builds it from a git ref or pulls it from a registry), generates a test CA and a server certificate whose SAN is the VM's public FQDN, and starts the hardened container.
+# The log is /var/log/ekmmock-bootstrap.log. SSH password authentication is already off (set by the template); only your public key logs in.
+#
+# The master key (a secret) is written from the template's secure parameter to a root-only file and handed to the container as a read-only file. cloud-init and the Azure agent keep
+# their own root-only copy of this document (custom data) on the OS disk; anyone with root on the VM (or Azure RBAC rights to run commands on it) can read the master key. This is a test tool.
+write_files:
+  - path: /opt/ekmmock/config/fqdn
+    encoding: b64
+    owner: root:root
+    permissions: '0644'
+    content: '@@FQDN@@'
+  - path: /opt/ekmmock/config/image-source
+    encoding: b64
+    owner: root:root
+    permissions: '0644'
+    content: '@@IMAGE_SOURCE@@'
+  - path: /opt/ekmmock/config/container-image
+    encoding: b64
+    owner: root:root
+    permissions: '0644'
+    content: '@@CONTAINER_IMAGE@@'
+  - path: /opt/ekmmock/config/repo-url
+    encoding: b64
+    owner: root:root
+    permissions: '0644'
+    content: '@@REPO_URL@@'
+  - path: /opt/ekmmock/config/repo-ref
+    encoding: b64
+    owner: root:root
+    permissions: '0644'
+    content: '@@REPO_REF@@'
+  - path: /opt/ekmmock/config/generate-certificate
+    encoding: b64
+    owner: root:root
+    permissions: '0644'
+    content: '@@GENERATE_CERTIFICATE@@'
+  - path: /opt/ekmmock/config/enable-faults
+    encoding: b64
+    owner: root:root
+    permissions: '0644'
+    content: '@@ENABLE_FAULTS@@'
+  - path: /opt/ekmmock/config/registry-user
+    encoding: b64
+    owner: root:root
+    permissions: '0600'
+    content: '@@REGISTRY_USER@@'
+  - path: /opt/ekmmock/secrets/registry-password
+    encoding: b64
+    owner: root:root
+    permissions: '0400'
+    content: '@@REGISTRY_PASSWORD@@'
+  - path: /opt/ekmmock/secrets/master.key
+    encoding: b64
+    owner: root:root
+    permissions: '0400'
+    content: '@@MASTER_KEY@@'
+  - path: /opt/ekmmock/bin/ekmmock-vm.sh
+    encoding: b64
+    owner: root:root
+    permissions: '0750'
+    content: '@@SETUP_SCRIPT@@'
+runcmd:
+  - [bash, -c, '/opt/ekmmock/bin/ekmmock-vm.sh bootstrap >>/var/log/ekmmock-bootstrap.log 2>&1']

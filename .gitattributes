@@ -3,3 +3,5 @@
 Makefile text eol=lf
 *.sh text eol=lf
 deploy/docker/Dockerfile text eol=lf
+# The Azure deployment files run on Linux (cloud-init, the VM bootstrap script, e2e.sh) or are compiled by Bicep: LF only.
+deploy/azure/** text eol=lf
