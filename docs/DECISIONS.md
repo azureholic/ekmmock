@@ -517,3 +517,191 @@ the handshake and gets `401 Unauthenticated` for every operation (no operation i
   towards api.nuget.org from inside the container), so the script runs the **already built** portable output on the container's runtime
   (.NET 10.0.14, OpenSSL). It needs a stub content root for `WebApplicationFactory` (Windows path baked in at build time), which the script creates.
 
+## M4: Where the code lives
+
+- `src/EkmMock.Server/Inspector/` (everything `internal`, still only `Program` is public): `ExchangeCapture.cs` (middleware, per-exchange session, record factory),
+  `CaptureStreams.cs` (the two stream wrappers and the pooled 16 KiB buffer), `SecretMasking.cs` (secrecy rule, fingerprint, redactor, retained secrets),
+  `ExchangeRecord.cs` (the record and its groups, the connection event DTO, JSON context), `InspectorPipeline.cs` (bounded queue, consumer, stage interface),
+  `ExchangeRingBuffer.cs` (ring buffer, filters, paging), `InspectorFeed.cs` (live feed), `InspectorJsonlWriter.cs`, `AuditLog.cs`, `DashboardAggregator.cs`,
+  `InspectorService.cs` (the console-facing contracts `IInspectorQuery`/`IInspector`, reveal, replay seam, export, connection statistics), `KqlSnippets.cs`,
+  `InspectorOptions.cs` (`Inspector`, `Limits` options, budget status, reveal gate).
+- Small hooks in M2/M3 code: `EkmRequestContext` got `AuthElapsed`, `InjectedDelay`, `QueueWait`, `FaultRule` (the last three are filled by M7), `EngineCalled`,
+  `RequestNumberOnConnection`; `EkmAuthMiddleware` times the authorizer; the three handlers set `EngineCalled`; `ConnectionState.RequestStarted` returns the ordinal;
+  `BoundedDropOldestQueue` takes an optional `onDropped` callback; `ConnectionEventPump` also hands every event to the inspector stages. Nothing else changed in the
+  EKM path: all M2/M3 tests pass unchanged (the one edit to an existing test is a new allowed log field, see "Logging" below, and a de-flaked log helper, see "Tests").
+
+## M4: Capture pipeline (spec 8.1, 8.3)
+
+- **Position:** `InspectorCaptureMiddleware` is the first middleware of the EKM branch (`Capture → Exchange → Route → [Faults] → Auth → [Limits] → Dispatcher`), so it sees every
+  exchange on an EKM port: 2xx, 400 variants, 401, 404 (also unroutable paths), 405, 5xx, oversize bodies. A test pins the order in `EkmPipeline.cs`.
+- **Deviation from the spec text (recorded on purpose): no `EnableBuffering`.** Spec 8.3 says "buffers the request body (`EnableBuffering`, max 16 KiB)". `EnableBuffering` makes the
+  *capture* read the whole body before routing and authentication, which would change what M2/M3 do (a client that sends headers and no body would hold up a 401/404; Kestrel's body-size
+  exception, which M2 maps to `400 InvalidRequest`, would be thrown inside the capture instead of the dispatcher; chunked bodies would be buffered twice). Instead `Request.Body` is wrapped by a
+  pass-through stream that copies what the pipeline reads (at most 16 KiB, the rest is counted) and `Response.Body` by one that copies what is written (at most 16 KiB). Reads and writes,
+  including exceptions, reach the real streams unchanged; nothing is buffered, delayed or reordered. The stream wrappers are restored when the exchange ends.
+- **A request that is rejected before its body is read** (`401`, `404`, `405`, bad `api-version`/key name/content type): after the response has been written the capture reads at most 16 KiB of the
+  rest through the same wrapper (`DrainTimeout` 100 ms, any failure just ends the capture of the body), so that rejected requests are captured with their body. The client already has its
+  answer (Kestrel flushes the response on write); the only effect is that the keep-alive connection is held for at most 100 ms longer when a client sent fewer bytes than it declared (tested over a raw TLS socket:
+  answer in well under 1 s, body captured afterwards). This wait is outside the overhead measurement because it is I/O, not capture work.
+- **Size and truncation:** `SizeBytes` is the larger of the observed bytes and the declared `Content-Length`; `Truncated` means more than 16 KiB passed; the text covers the first 16 KiB.
+- **The record** (`ExchangeRecord`, groups of spec 8.1) is built *after* the exchange from `EkmRequestContext` (exchange id, connection id, route, ids, alg, error code, timings), the
+  `ConnectionState` of M3 (TLS protocol, cipher, ALPN, SNI, handshake time on the first exchange of a connection only, request ordinal; `Resumed` is `false` because resumption is disabled) and
+  the `EkmAuthResult` of M3 (certificate, chain result, CN allowed, namespace matched, internal failure reason). `ReceivedAtUtc` is truncated to microseconds. Requests rejected before Auth (an unroutable
+  path) still show the certificate of the connection and `AuthEvaluated=false`. Key facts (`oct`/`RSA`, size, state, wrap/unwrap counters *after* the call) are read with `IKeyManager.Get`
+  only when a handler asked the engine about the key and the answer was not `404` (so no tombstone lookup under the store lock). `request_id`/`correlation_id`/`pool_name` come from the dispatcher or, for
+  requests it never parsed, from the captured body, so a rejected request can still be found by `correlation_id`. Headers: at most 64, values at most 1024 characters, `Authorization`/`Cookie`/... are `[redacted]`.
+  Fields for M7 exist now and are zero/null: `InjectedDelayMs`, `QueueWaitMs`, `Faults.Rule`.
+- **Never awaits the consumer:** the request path only calls `InspectorPipeline.Enqueue`, a non-blocking write into a bounded `Channel` (default capacity 8192, `Inspector:ChannelCapacity`) with
+  `DropOldest`. Every drop increments an in-memory counter and the `ekmmock_inspector_dropped_total` instrument on `Meter("EkmMock")` (connection events dropped by their own queue count there too) and zeroes the raw
+  secrets of the dropped record. Proven with a deliberately blocked consumer: 100 requests while it is stuck all complete, the median latency does not move, exactly `100 − capacity` captures are dropped, and the buffer
+  ends with the newest records.
+- **Capture never fails a request:** everything the capture does on the request thread is inside try/catch (the body-seal inside a read as well); a failure is counted (`CaptureDiagnostics.Failures`) and logged
+  once per 1000 with the exception *type* only (a parser message can quote the request). A stage failing on the consumer side is isolated from the other stages (`InspectorConsumer.StageFailures`).
+- **Consumer and stages:** one `BackgroundService` reads the queue and calls the stages in order: ring buffer, dashboard aggregator, connection statistics, live feed, JSONL writer (so a record is queryable before a
+  console is told about it). `OnIdle` (queue empty) flushes the JSONL file. At shutdown the consumer drains what is left and completes every feed subscription. Connection events keep their own queue
+  and pump (M3); the pump now also hands each event to the stages.
+- **Logging:** the log line gets `injected_delay_ms` (zero until M7); the existing test that pins the field set was extended by that one name. **The 150/250 ms warning/error levels of spec 9 are not
+  in M4**: the data exists, but the M2 test pins level `Information` for every line and a first request on a loaded machine can legitimately take more than 150 ms (JIT), so the thresholds would make that test
+  and others flaky; M7 owns fault delays and rewrites those tests anyway. `Limits:LatencyBudgetMs` (250) and `Limits:LatencyWarningMs` (150) exist now and drive the budget colour.
+- **Budget status** (`LatencyBudget.Classify`, pure): green below 150 ms, amber from 150 ms up to and including 250 ms, red above 250 ms (boundaries tested at 149 / 150 / 250 / 251 ms). "Over budget" in the filter and
+  the dashboard means red.
+
+## M4: Secret handling in the inspector (spec 8.4)
+
+- **The rule per (operation, direction)** (`BodyPositions.For`):
+
+  | Body | Position | Treatment |
+  |---|---|---|
+  | `wrapkey` request | `SecretRequest` | `value` is the plaintext DEK: masked |
+  | `unwrapkey` response | `SecretResponse` | `value` is the plaintext DEK: masked |
+  | `unwrapkey` request | `CiphertextRequest` | ciphertext: shown as sent; a body that is not one complete JSON object is not captured |
+  | `wrapkey` response | `Plain` | ciphertext: shown as sent |
+  | `info` / `metadata` request | `NoDekRequest` | shown as is, except a stray `value` (should not be there) is masked; not-JSON is shown (that is what one wants to see) |
+  | every other response (ProxyErrors, `info`, `metadata` with `n`/`e`) | `Plain` | shown as is |
+  | an **unroutable** request (operation unknown) | `SecretRequest` | a DEK may have been sent to a wrong path: treated like a wrap request. Its response is a plain ProxyError |
+
+- **Masked form and fingerprint:** `32 bytes · fp 3f9a1c07b2e4` = decoded length and the first 12 hex characters of the SHA-256 of the raw (decoded) bytes. Padded and unpadded base64url of the same bytes give the same
+  fingerprint (decoding uses the same strict `Base64UrlCodec` as the endpoint), and the same DEK gives the same fingerprint in the wrap request and the unwrap response (tested end to end).
+- **How a body is masked:** on a secret position the masked text is *built from the parsed JSON* (a `Utf8JsonReader` pass over the bytes that replaces value tokens by their masked form and copies the rest);
+  the original bytes are never turned into a string, and the buffer is zeroed as soon as the request body ends (the wrapper tells the session at end of stream, so for a wrap request the raw copy lives for a
+  few microseconds after the dispatcher has read it, not until the end of the exchange). Rules on a secret position: any property named `value` (case-insensitive, at any depth) is masked (`value` strings by
+  length+fingerprint; a string that is not valid base64url as `value (invalid, N chars)` with **no** fingerprint; a non-string as `value (invalid, not a string)`); at the top level only an allow-list is shown
+  (`request_context`; `alg` only when it is exactly one of the four algorithm names, compared as bytes so that a DEK in the `alg` field never becomes a string; on a response `code` and `message`), every other
+  top-level property is replaced by `(masked, N chars)`. That covers a DEK under a wrong field name or case, in `alg`, or in `request_context.value`.
+- **Unparseable-body policy (conservative):** a body on a secret position (and an unwrap request) that is not exactly one complete JSON object (bad JSON, trailing content, bad UTF-8, a scalar or array root, nesting
+  deeper than 32, larger than 16 KiB) is **not captured**: `Captured=false`, only the size and the note "Unparseable body not captured" are stored. `request_context` ids are still read from such a body when it
+  starts with a readable object, so it stays searchable by `correlation_id`. An oversize unwrap response (an A256KW DEK above roughly 12 KB would not fit in 16 KiB of base64url) is likewise not captured.
+- **Headers carry no DEK** (the DEK is only in bodies); sensitive header names are redacted anyway. Logs, JSONL files, exports, the live feed, the dashboard and the audit log are all built from `ExchangeRecord`
+  or fixed fields; a structural test walks the record types and fails if one could hold a `byte[]` or the retained secrets.
+- **Fingerprint caveat:** a 48-bit fingerprint of a *low-entropy* value could be brute-forced; real DEKs from Azure are random 256-bit keys. It is what the spec asks for; noted in OPEN-QUESTIONS.
+- **Limits of managed memory** (README in M9): the JSON reader and the HTTP stack may copy bytes the runtime owns; buffers EkmMock owns are zeroed, strings cannot be. `Reveal` necessarily produces a string.
+
+## M4: Reveal, retention and audit (spec 8.4, 5.4)
+
+- **Gate:** reveal is possible only when `Inspector:SecretDisplay=Reveal` **and** the process was started with `EKMMOCK_INSPECTOR_ALLOW_REVEAL=true` (read once at construction of `EnvironmentRevealGate`,
+  never from configuration; `InspectorOptions` has no member that could grant it). `Reveal` without the environment flag, or the flag without the setting, is `Masked`: nothing raw is retained.
+- **Retention (only when allowed):** `RetainedSecrets` holds the complete raw request body of an exchange (for reveal of a wrap DEK and for replay) and the complete raw response body of an unwrap (for reveal of the
+  unwrapped DEK), as `byte[]`. It is **not part of the record**: it lives in the ring buffer slot of its exchange (the record type has no place for it), so the JSONL writer, the export, the feed and the dashboard
+  cannot reach it. It is zeroed when the slot is evicted, when the buffer is cleared, when the capture queue drops the record, and when the capture fails. A body above 16 KiB is never retained.
+- **`IInspector.Reveal(exchangeId, field, user)`** (`request.value` / `response.value`): refuses when the gate is closed (`InspectorRevealException(Disabled)`, and the *denied attempt* is audited as
+  `inspector.reveal.denied`), reads the value under the ring buffer's lock (an eviction cannot zero it mid-read), **writes the audit entry first and returns the value only if that succeeded** (fail closed:
+  `AuditUnavailable`). Other failures: `UnknownField`, `ExchangeNotFound`, `NotRetained`.
+- **`IAuditLog`** (`FileAuditLog`, `audit.jsonl` on the data volume): append-only JSONL `{at, user, action, target, detail}`, one `Write` of one line under a lock, flushed to disk before `Append` returns, fields bounded
+  to 256 characters and JSON-escaped (a hostile user name cannot forge a line). The reveal entries are `inspector.reveal` with target `exchange:<id>/<field>` (never the value). M5 provides the user identity, M6 the Audit page
+  and the other state-changing actions.
+- **Replay seam:** `IInspector.CanReplay(id)` is true iff the gate is open, the exchange is in the buffer and its raw request body was retained (so not for an oversize body); otherwise the reason is
+  `RevealNotAllowed`, `ExchangeNotFound` or `BodyNotRetained`. `ReplayAsync` checks that, audits (`inspector.replay`) and hands a private copy of the body to the registered `IReplaySender` (M6 implements it with
+  the console test client certificate; the sender disposes the request, which zeroes the body). Without a sender it says so and sends nothing.
+
+## M4: Ring buffer, filters, feed (spec 8.3, 8.5)
+
+- **Ring buffer** (`Inspector:RingBufferSize`, default 10 000): a circular array behind one short lock, kept sorted by exchange id (records arrive in completion order, which differs slightly from start order under
+  concurrency; late arrivals are bubbled back a few places), so lookup is a binary search and newest-first is the tail. Readers copy references out and filter outside the lock. Memory: a typical record is a few KB
+  (small bodies); the worst case is two 16 KiB bodies per record held as UTF-16 text, so a flood of oversize requests could take several hundred MB at 10 000 records; lower `RingBufferSize` if that matters. A dashboard
+  snapshot sorts the retained latency samples (at most 4096 per operation and minute), which is milliseconds, not microseconds: poll it every few seconds, not per request.
+- **Filters** (`ExchangeFilter`, combined with AND): `Operation`, `Namespace`, `Key`, `ClientCommonName` are exact and case-sensitive (a CN is case-sensitive everywhere); `Text` is a case-insensitive substring of
+  `correlation_id`, `pool_name`, `request_id`; `StatusClass` 2/4/5; `OnlyErrors` = status ≥ 400; `OnlyOverBudget` = red; `HideInfo` hides the health probes.
+- **Paging:** newest first, `Limit` clamped to 1..1000; `BeforeId` continues with older records (`NextBeforeId` is the cursor, `HasMore` says whether there are more), `AfterId` returns what is newer than a cursor
+  (catch-up after a pause). Ids are sequential, so cursors stay valid while the buffer evicts.
+- **Live feed** (`IInspectorFeed.Subscribe`): every subscriber has its **own** bounded `DropOldest` channel (`Inspector:SubscriberCapacity`, default 1000) with its own `Dropped` counter; publishing never blocks, a
+  subscriber that never reads loses only its own oldest items, `Dispose` unsubscribes and completes the reader, host shutdown completes everyone. Optional per-subscriber filter and the "connection events inline"
+  toggle. Items are immutable and shared between subscribers.
+- **Connections** (spec 8.2/8.5): `ConnectionEvents` (newest first, filter by kind/connection/failures), `OpenConnections` (from the M3 registry: remote endpoint, age, request count, TLS facts, client
+  certificate subject), `ConnectionStatistics` (opened, handshakes succeeded/failed with a count per reason, closed, resumed handshakes, **resumption rate** — always 0 here because resumption is disabled —, requests on
+  closed connections and the average per closed connection). Connection events are also JSONL lines (`"type":"connection"`) and feed items.
+
+## M4: JSONL files (spec 8.3)
+
+- `Inspector:Persist=true` writes to `<Data:Path>/inspector` (or `Inspector:PersistPath`): `inspector-yyyyMMdd.jsonl` (UTC day, **daily rotation**; the clock is the injected `TimeProvider`), rolled over to
+  `inspector-yyyyMMdd.1.jsonl`, `.2`, ... before a file would exceed `Inspector:MaxFileBytes` (default 50 MiB, **size cap**; a single line larger than the cap gets a file of its own). Whenever a file is opened, files
+  older than `Inspector:RetainDays` (14) and then the oldest files beyond `Inspector:MaxTotalBytes` (500 MiB) are deleted (**prune**); the file being written and files that are not the inspector's are never
+  touched. After a restart the day's last file is continued while it has room.
+- One JSON object per line, `snake_case`, `"type":"exchange"` or `"type":"connection"`, written with the same source-generated serializer as the export, flushed when the queue runs empty (connection events at once).
+  The `·` of the masked form is written as `\u00B7` (the serializer's default escaping; the parsed text is identical). **Always masked**: the writer only ever sees `ExchangeRecord`, and no code path hands it raw
+  bytes. Writes are serialised by a lock (two consumer threads); an I/O error drops that line, closes the file and logs (rate limited), it never reaches a request.
+
+## M4: Dashboard aggregates and contracts (spec 8.5)
+
+- `DashboardAggregator` is a stage (consumer side, never the request path) with per-minute buckets covering the last hour regardless of the ring buffer size: per minute and operation the count, errors by code,
+  over-budget count, maximum, and up to `Inspector:MaxSamplesPerMinuteAndOperation` (4096) latency samples (reservoir sampling beyond that, so memory is bounded and counts stay exact).
+  Percentile method: **nearest rank**, `sorted[ceil(p/100·n) − 1]` (an observed value; the p95 of 1..100 ms is 95 ms). Windows (15 min and 1 h) cover the current minute and the N−1 before it. Snapshot: per-operation
+  count/p50/p95/p99/max/errors/over budget and the share over budget, errors by code (`HTTP <status>` when there is no code), requests per minute by operation and p50/p95/p99 per operation per minute for the last 60
+  minutes, the Managed HSM heartbeat (last `info`: time, client CN, status, age, `IsStale` when older than 60 s or never seen; the last *successful* `info` separately, because a rejected probe still proves that Managed HSM
+  reaches the endpoint), the dropped-capture counter and the number of exchanges since start. An unroutable request counts as `(unrouted)`.
+- Contracts for M5 and the CLI: `IInspectorQuery` (`Query`, `Get`, `Count`, `ConnectionEvents`, `OpenConnections`, `ConnectionStatistics`, `Dashboard`, `Status`, `Kql`) and `IInspector` (adds `Feed`,
+  `Reveal`, `CanReplay`, `ReplayAsync`, `ExportAsync`). `Status` reports ring capacity/count/evictions, drops, queue capacity, captures, capture failures, persistence, secret display mode, whether reveal is allowed and the
+  number of feed subscribers. Export (`ExportFormat.Json`: `{exported_at_utc, masked:true, count, exchanges:[…]}`; `Jsonl`: one exchange per line, the file shape) is built from `ExchangeRecord` only, oldest first,
+  with the same filter. HAR is not provided.
+
+## M4: KQL snippet (spec 8.5)
+
+- Pure function `KqlSnippets` (`ByCorrelationId`, `ByKeyAndTime`, `For(record)`), schema from Microsoft Learn ("Logging and monitoring for Managed HSM external key management" and "Troubleshoot Managed HSM external
+  key management", read 9 November 2026): table `AzureDiagnostics`, `ResourceProvider == "MICROSOFT.KEYVAULT"`, `OperationName` `EkmGetProxyInfo` / `EkmGetKeyMetadata` / `EkmWrapKey` / `EkmUnwrapKey`, key identifier inside
+  `requestUri_s`, `ResultType`, `ResultDescription`, `TimeGenerated`. Learn does **not** say which column carries the proxy `correlation_id` (`correlationId_g` in one article, `CorrelationId` in another), so the
+  primary query matches either with `column_ifexists(...)` (a missing column is not an error) and a second query implements the documented fallback (key identifier + ±1 s window). Client text is escaped
+  into the KQL string literal; control characters are dropped. See OPEN-QUESTIONS.
+
+## M4: Overhead benchmark (spec 8.3, 14 test 24)
+
+- **Method** (`InspectorOverheadBenchmarkTests`, `[Trait("Category","Benchmark")]`, runs with the normal test run but alone: `DisableParallelization` collection). The real EKM pipeline (Exchange, Route, Auth, Dispatcher, the
+  real software HSM, real AES key wrap) runs on `DefaultHttpContext` objects with in-memory bodies, with and without the capture middleware in front, the real consumer thread running; 10 000 warm-up requests, then
+  20 000 measured, mix of wrap, unwrap, info, metadata (AES-256, A256KWP, 32-byte DEKs; RSA left out, its millisecond-scale crypto is noise for a capture comparison), once in default masked mode and once with reveal
+  allowed (extra raw copies). Two numbers: (1) **capture overhead**: `Stopwatch` timestamps inside the middleware around exactly its own work (stream wrapping, body copies, masking, record building, enqueue, buffer
+  release; not the pipeline's time, not the rejected-request body wait), asserted `p99 < 1 ms`; (2) an **end-to-end A/B** of the same requests through both pipelines, interleaved A-B / B-A, asserted `p99(with) − p99(without) < 1 ms`
+  and `p50` difference `< 1 ms`. It also asserts that no capture was dropped. The 1 ms threshold is not relaxed.
+- **Measured** (Windows 11, .NET 10.0.14, 8 logical cores, Debug build of the test assembly, final full test run; microseconds per request, 20 000 requests each):
+
+  | Run | Capture overhead p50 / p90 / **p99** / max | Pipeline with capture p50 / p99 | Pipeline without capture p50 / p99 | End-to-end difference p50 / p99 | Dropped |
+  |---|---|---|---|---|---|
+  | Masked (default) | 45.0 / 55.0 / **125.9** / 12 518 | 62.1 / 235.3 | 21.2 / 119.8 | +40.9 / +115.5 | 0 |
+  | Reveal allowed | 49.4 / 62.1 / **134.4** / 14 151 | 75.2 / 229.2 | 26.8 / 114.9 | +48.4 / +114.3 | 0 |
+
+  So the capture adds roughly 45 µs at the median and about 0.13 ms at p99, about one eighth of the 1 ms budget. Earlier runs during development gave p99 between 95 and 135 µs. The same test also passes in the
+  Linux container (`tests/run-server-tests-linux.ps1`). Numbers are appended to `inspector-benchmark.txt` next to the test assembly on every run.
+- **Outliers:** the maximum (10 to 20 ms) is a single-sample event that also occurs *without* the capture (GC or tiering on a loaded dev machine); it is reported, not asserted; p99 is what the spec asks for.
+
+## M4: Tests
+
+- New test classes (all in `tests/EkmMock.Server.Tests`): `SecretMaskingTests` (secrecy rule, fingerprint, every masking case, structural no-leak), `ExchangeRingBufferTests` (capacity, eviction order, each filter,
+  paging, secrets zeroed, parallel writers/readers), `DashboardAndBudgetTests` (budget boundaries, KQL, aggregates with known data), `FeedJsonlAndAuditTests` (feed, JSONL rotation/cap/prune/concurrency, audit),
+  `InspectorCaptureTests` (every request kind captured on the in-process host, record groups, usage counters, within 1 s, full queue with a blocked consumer, eviction, status), `InspectorMaskingEndToEndTests`
+  (masking end to end, rejected requests that carry a DEK, **the leak scan of spec 14 test 18 across ring buffer, JSONL files, exports, live feed, logs, dashboard/status and audit log**, export), `InspectorRevealTests` (gate,
+  denied, allowed with audit, failures, fail-closed audit, eviction, replay seam), `InspectorMtlsTests` (real Kestrel mTLS: 401 without certificate and with a wrong CN or namespace, valid caller with TLS facts per
+  connection, 404/405/400/503, chunked oversize body, a request that never sends its body, connection events incl. a handshake failure with reason, open connections, statistics, JSONL), `InspectorOverheadBenchmarkTests`.
+- **The 429 case is a skipped placeholder** (`ATooManyRequestsExchange_IsCaptured_WhenLimitsExist`): nothing produces 429 before M7 (Limits). The capture itself is status-agnostic and is proven with every other status.
+- **Existing tests:** none weakened. Two edits: `LoggingAndLeakTests.AllowedLogFields` gained `injected_delay_ms`, and `MtlsEndpointTests.LastExchangeLog` now waits (up to 10 s) for the log line instead of reading it at once.
+  The log line is written by the Exchange middleware *after* the response has been flushed, so on a real listener a fast client could read the log before it existed; this showed up once under CPU load
+  (`Sequence contains no matching element`, reproduced with 12 busy processes, then fixed). It was a race of the M3 test helper, not of the server.
+- **Flakiness:** the server test project (708 tests, 5 skipped) was run six times in a row on the final code: 6 of 6 green, 27 to 31 s each. While building M4 two flakes surfaced and were fixed, both test-side: the M3 log helper race above, and my own
+  blocked-consumer test (a queue of 8 can legitimately drop in a free phase on a loaded machine; it now drains before arming and asserts deltas). The new tests were also stressed under heavy CPU load (8 consecutive runs of
+  the inspector classes with 12 busy processes: no failure). Random inputs in tests are constructed so that they cannot accidentally be valid (for example the "invalid base64url" value always contains `+` and `/`).
+
+## M4: Not covered / deliberately skipped
+
+- **Spec 9 log levels (warning above 150 ms, error above 250 ms)**: left for M7 (reason above). **Metrics exposure** (`/metrics`): M7; the `ekmmock_inspector_dropped_total` instrument exists on the meter.
+- **Replay sending** (M6), **console pages and the Blazor hub** (M5), **`/api/console/*` and the CLI export** (M5/M8): only the service layer exists. HAR export is not provided (JSON and JSONL are).
+- **Capture of request bodies larger than 16 KiB** is truncated by design; a *secret-position* oversize body is not captured at all (only its size).
+- **No capture of the TLS handshake bytes**, only M3's connection events. `TLS session resumed` is always `false` (resumption is disabled, DECISIONS "M3: TLS stack").
+- **Linux container result:** the full server test project ran in `mcr.microsoft.com/dotnet/sdk:10.0` via `tests/run-server-tests-linux.ps1` (OpenSSL): 708 tests, 0 failed, 1 skipped (the 429 placeholder); the four Linux-only
+  cipher tests ran and passed there.
+

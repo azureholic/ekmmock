@@ -69,7 +69,12 @@ public sealed class MtlsEndpointTests : IClassFixture<MtlsFixture>
 
     private static string BPath(string key, string op) => EkmClient.Path(MtlsFixture.PrefixB, key, op);
 
-    private static CapturedLog LastExchangeLog(RealEkmHost host, int skip) => host.Logs.Entries.Skip(skip).Last(static e => e.Category == "EkmMock.Exchange");
+    // The Exchange middleware writes its log line after the response is flushed, so on a real listener the client can be faster than the line: wait for it.
+    private static CapturedLog LastExchangeLog(RealEkmHost host, int skip)
+    {
+        SpinWait.SpinUntil(() => host.Logs.Entries.Skip(skip).Any(static e => e.Category == "EkmMock.Exchange"), TimeSpan.FromSeconds(10));
+        return host.Logs.Entries.Skip(skip).Last(static e => e.Category == "EkmMock.Exchange");
+    }
 
     // ---- valid caller: 200, TLS facts, round trips -----------------------------------------------------------------------------------
 

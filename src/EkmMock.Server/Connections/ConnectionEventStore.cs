@@ -1,5 +1,6 @@
 using System.Diagnostics.Metrics;
 using System.Collections.Concurrent;
+using EkmMock.Server.Inspector;
 
 namespace EkmMock.Server.Connections;
 
@@ -83,16 +84,21 @@ internal sealed class ConnectionEventStore
     private static TaskCompletionSource NewSignal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 }
 
-/// <summary>Drains the sink into the store. A separate consumer on purpose: the connection path only ever enqueues.</summary>
+/// <summary>
+/// Drains the sink into the store and then hands every event to the inspector stages (live feed, JSONL, connection statistics). A separate consumer on
+/// purpose: the connection path only ever enqueues. One stage failing never stops the others or the pump.
+/// </summary>
 internal sealed class ConnectionEventPump : BackgroundService
 {
     private readonly ConnectionEventSink _sink;
     private readonly ConnectionEventStore _store;
+    private readonly IInspectorStage[] _stages;
 
-    public ConnectionEventPump(ConnectionEventSink sink, ConnectionEventStore store)
+    public ConnectionEventPump(ConnectionEventSink sink, ConnectionEventStore store, IEnumerable<IInspectorStage>? stages = null)
     {
         _sink = sink;
         _store = store;
+        _stages = [.. stages ?? []];
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -102,6 +108,21 @@ internal sealed class ConnectionEventPump : BackgroundService
             await foreach (var connectionEvent in _sink.Reader.ReadAllAsync(stoppingToken).ConfigureAwait(false))
             {
                 _store.Add(connectionEvent);
+                if (_stages.Length > 0)
+                {
+                    var record = ConnectionEventRecords.From(connectionEvent);
+                    foreach (var stage in _stages)
+                    {
+                        try
+                        {
+                            stage.OnConnectionEvent(record);
+                        }
+                        catch (Exception)
+                        {
+                            // A broken stage must not stop the events of the others.
+                        }
+                    }
+                }
             }
         }
         catch (OperationCanceledException)
@@ -119,16 +140,30 @@ internal sealed class EkmMetrics : IDisposable
 {
     public const string MeterName = "EkmMock";
     public const string HandshakeFailuresName = "ekmmock_tls_handshake_failures_total";
+    public const string InspectorDroppedName = "ekmmock_inspector_dropped_total";
 
     private readonly Meter _meter;
     private readonly Counter<long> _handshakeFailures;
+    private readonly Counter<long> _inspectorDropped;
     private readonly ConcurrentDictionary<string, long> _failureCounts = new(StringComparer.Ordinal);
+    private long _inspectorDroppedTotal;
 
     public EkmMetrics()
     {
         _meter = new Meter(MeterName);
         _handshakeFailures = _meter.CreateCounter<long>(HandshakeFailuresName, description: "TLS handshakes on the EKM endpoint that did not complete, by reason.");
+        _inspectorDropped = _meter.CreateCounter<long>(InspectorDroppedName, description: "Inspector capture records (exchanges and connection events) dropped because the bounded capture queue was full.");
     }
+
+    /// <summary>Counts one capture record that was dropped (spec 8.3). Never blocks, never throws.</summary>
+    public void RecordInspectorDropped()
+    {
+        Interlocked.Increment(ref _inspectorDroppedTotal);
+        _inspectorDropped.Add(1);
+    }
+
+    /// <summary>Capture records dropped since the process started (the console shows it next to the dashboard).</summary>
+    public long InspectorDroppedTotal => Interlocked.Read(ref _inspectorDroppedTotal);
 
     public void RecordHandshakeFailure(HandshakeFailureReason reason)
     {

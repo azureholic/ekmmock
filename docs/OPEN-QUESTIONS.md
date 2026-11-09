@@ -98,3 +98,26 @@ supported" (`OperationNotAllowed` exists in the code but nothing emits it yet).
 25. **Windows CA-store side effect.** The Windows TLS stack caches CA certificates that it sees in the current user's `CurrentUser\CA` store. Running
     EkmMock with real or generated certificates on a Windows dev machine can therefore leave certificates there (the tests clean up their own).
     OS behaviour; Linux containers (the production target) are unaffected.
+
+## Added during M4
+
+26. **Which `AzureDiagnostics` column carries the proxy's `correlation_id`?** The Microsoft Learn pages "Logging and monitoring for Managed HSM external key management" and "Troubleshoot Managed HSM external key
+    management" (read 9 November 2026) say to correlate Managed HSM and proxy logs by the request context fields (`request_id`, `correlation_id`, `pool_name`), by the external key identifier in `requestUri_s` and by a
+    ±1 second timestamp window, and they list a correlation column as `correlationId_g` in one article and `CorrelationId` in the other, but they never state that this column *equals* the `correlation_id` that Managed HSM puts
+    in `request_context`, and they list no column for `request_id` or `pool_name` at all. The inspector's KQL snippet therefore matches either column name with `column_ifexists` (no error when one does not exist) and
+    offers the documented key-plus-time fallback as a second query; no column was invented. Confirm with real `EkmProxyOperation`/`AzureDiagnostics` rows next to a captured exchange (the inspector shows the three
+    context fields for every exchange, including rejected ones).
+27. **What Managed HSM really sends is now observable.** M4 records, per exchange, the exact request headers (open question 11: the `Content-Type` value), the request body including whether `request_context` is present on `info`
+    (question 10), `alg` and DEK sizes per key type (question 4), and per connection the ALPN, the number of requests it carried and its lifetime (questions 2 and 5: padded base64url shows in the captured text of a
+    wrapped value; HTTP version and connection reuse show in the Connections data). These questions stay open until someone runs it against a real pool; the data to answer them is captured.
+28. **Fingerprints of low-entropy secrets.** The 12-hex-character fingerprint of spec 8.4 is 48 bits of a SHA-256 of the DEK. For the random 256-bit DEKs Azure services generate that reveals nothing, but a *short or guessable*
+    value sent by a test client could be brute-forced from its fingerprint. EkmMock follows the spec; if that matters, a salted fingerprint (per process) would still let one match wrap input to unwrap output within a run.
+29. **Spec 8.3 says `EnableBuffering`; M4 wraps the streams instead.** The reasons are in DECISIONS "M4: Capture pipeline" (no read-ahead before routing/auth, Kestrel's body-size error keeps its M2 mapping, no
+    double buffering). Observable differences: none in responses; a rejected request's body is read after the response with a 100 ms bound. If the spec author meant `EnableBuffering` literally (for example to let handlers re-read the
+    body), say so; nothing in the code base re-reads a body.
+30. **Bodies above 16 KiB are not fully captured, and on a secret position not at all.** A wrap request cannot exceed 16 KiB (Kestrel and the endpoint refuse it), but an *unwrap response* with an A256KW DEK above roughly
+    12 KB would exceed 16 KiB of base64url and show as "not captured" (size only). Spec 4.10 gives A256KW no upper DEK size; Azure services use 32-byte DEKs. Raise the capture limit if a real service ever needs it.
+31. **TLS session resumption in the inspector.** `Tls.Resumed` is always `false` and the Connections tab's resumption rate is always 0, because M3 disabled resumption (question 23). If resumption is enabled later the
+    connection event and the record carry the value without further change.
+32. **The 150/250 ms warning/error log levels (spec 9) are not implemented yet** (decided in DECISIONS "M4: Capture pipeline"; M7). Until then a slow request is visible in the inspector (budget colour, filter "only over
+    budget") and in the `duration_ms` field, not as a log level.

@@ -132,7 +132,7 @@ internal sealed class BoundedDropOldestQueue<T>
     private readonly Channel<T> _channel;
     private long _dropped;
 
-    public BoundedDropOldestQueue(int capacity)
+    public BoundedDropOldestQueue(int capacity, Action<T>? onDropped = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(capacity, 1);
         Capacity = capacity;
@@ -144,7 +144,11 @@ internal sealed class BoundedDropOldestQueue<T>
                 SingleWriter = false,
                 AllowSynchronousContinuations = false,
             },
-            _ => Interlocked.Increment(ref _dropped));
+            dropped =>
+            {
+                Interlocked.Increment(ref _dropped);
+                onDropped?.Invoke(dropped);
+            });
     }
 
     public int Capacity { get; }
@@ -171,7 +175,8 @@ internal sealed class ConnectionEventSink : IConnectionEventSink
     private readonly BoundedDropOldestQueue<ConnectionEvent> _queue;
     private long _sequence;
 
-    public ConnectionEventSink(int capacity = DefaultCapacity) => _queue = new BoundedDropOldestQueue<ConnectionEvent>(capacity);
+    public ConnectionEventSink(int capacity = DefaultCapacity, Action<ConnectionEvent>? onDropped = null)
+        => _queue = new BoundedDropOldestQueue<ConnectionEvent>(capacity, onDropped);
 
     public ChannelReader<ConnectionEvent> Reader => _queue.Reader;
 

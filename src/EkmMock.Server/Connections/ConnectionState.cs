@@ -49,7 +49,8 @@ internal sealed class ConnectionState
 
     public long RequestCount => Interlocked.Read(ref _requestCount);
 
-    public void RequestStarted() => Interlocked.Increment(ref _requestCount);
+    /// <summary>Counts a request on this connection and returns its ordinal (1 for the first).</summary>
+    public long RequestStarted() => Interlocked.Increment(ref _requestCount);
 
     // ---- what the client offered (set by the tap) ----
 

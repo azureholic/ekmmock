@@ -1,6 +1,7 @@
 using EkmMock.Crypto;
 using EkmMock.Server.Connections;
 using EkmMock.Server.Ekm;
+using EkmMock.Server.Inspector;
 using EkmMock.Server.Tls;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -71,6 +72,10 @@ internal static class EkmServerServiceCollectionExtensions
         services.AddOptions<DevOptions>().BindConfiguration(DevOptions.SectionName);
         services.AddOptions<EkmEndpointOptions>().BindConfiguration(EkmEndpointOptions.SectionName);
         services.AddOptions<TlsOptions>().BindConfiguration(TlsOptions.SectionName);
+        services.AddOptions<InspectorOptions>().BindConfiguration(InspectorOptions.SectionName).ValidateOnStart();
+        services.AddOptions<LimitsOptions>().BindConfiguration(LimitsOptions.SectionName).ValidateOnStart();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<InspectorOptions>, InspectorOptionsValidator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<LimitsOptions>, InspectorOptionsValidator>());
 
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<ExchangeCounter>();
@@ -80,7 +85,11 @@ internal static class EkmServerServiceCollectionExtensions
         services.TryAddSingleton(static sp => new ClientTrustProvider(sp.GetRequiredService<NamespaceStore>()));
         services.TryAddSingleton<ClientCertificateValidator>();
         services.TryAddSingleton<ConnectionRegistry>();
-        services.TryAddSingleton<ConnectionEventSink>();
+        services.TryAddSingleton<ConnectionEventSink>(static sp =>
+        {
+            var metrics = sp.GetRequiredService<EkmMetrics>();
+            return new ConnectionEventSink(onDropped: _ => metrics.RecordInspectorDropped());
+        });
         services.TryAddSingleton<IConnectionEventSink>(static sp => sp.GetRequiredService<ConnectionEventSink>());
         services.TryAddSingleton<ConnectionEventStore>();
         services.TryAddSingleton<EkmMetrics>();
@@ -91,6 +100,31 @@ internal static class EkmServerServiceCollectionExtensions
         services.TryAddSingleton<IEkmCallerAuthorizer, MtlsCallerAuthorizer>();
         services.AddHostedService<ConnectionEventPump>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IConfigureOptions<KestrelServerOptions>, EkmKestrelSetup>());
+
+        // ---- Traffic inspector (M4, spec 8) ----
+        services.TryAddSingleton<IInspectorRevealGate, EnvironmentRevealGate>();
+        services.TryAddSingleton<IAuditLog, FileAuditLog>();
+        services.TryAddSingleton<CaptureDiagnostics>();
+        services.TryAddSingleton<InspectorPipeline>();
+        services.TryAddSingleton<ExchangeRecordFactory>();
+        services.TryAddSingleton(static sp => new ExchangeRingBuffer(sp.GetRequiredService<IOptions<InspectorOptions>>()));
+        services.TryAddSingleton(static sp => new DashboardAggregator(sp.GetRequiredService<IOptions<InspectorOptions>>(), sp.GetRequiredService<TimeProvider>()));
+        services.TryAddSingleton<ConnectionStatsStage>();
+        services.TryAddSingleton<InspectorFeed>();
+        services.TryAddSingleton<IInspectorFeed>(static sp => sp.GetRequiredService<InspectorFeed>());
+        services.TryAddSingleton<InspectorJsonlWriter>();
+        services.TryAddSingleton<InspectorService>();
+        services.TryAddSingleton<IInspector>(static sp => sp.GetRequiredService<InspectorService>());
+        services.TryAddSingleton<IInspectorQuery>(static sp => sp.GetRequiredService<InspectorService>());
+
+        // Stages run in this order on the consumer threads: the ring buffer first, so a record is queryable before it is pushed to a console.
+        // (Plain AddSingleton: TryAddEnumerable cannot tell factory registrations apart.)
+        services.AddSingleton<IInspectorStage>(static sp => sp.GetRequiredService<ExchangeRingBuffer>());
+        services.AddSingleton<IInspectorStage>(static sp => sp.GetRequiredService<DashboardAggregator>());
+        services.AddSingleton<IInspectorStage>(static sp => sp.GetRequiredService<ConnectionStatsStage>());
+        services.AddSingleton<IInspectorStage>(static sp => sp.GetRequiredService<InspectorFeed>());
+        services.AddSingleton<IInspectorStage>(static sp => sp.GetRequiredService<InspectorJsonlWriter>());
+        services.AddHostedService<InspectorConsumer>();
 
         // Secrets never come from configuration: the provider reads EKMMOCK_MASTER_KEY / EKMMOCK_MASTER_KEY_FILE directly.
         services.TryAddSingleton<IMasterKeyProvider>(static sp

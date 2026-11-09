@@ -64,6 +64,24 @@ internal sealed class EkmRequestContext
 
     public TimeSpan Duration { get; set; }
 
+    /// <summary>Time spent in the Auth stage (certificate chain build and CN check); zero when Auth did not run.</summary>
+    public TimeSpan AuthElapsed { get; set; }
+
+    /// <summary>Delay injected by a fault rule before the crypto call. Filled by M7; zero until then.</summary>
+    public TimeSpan InjectedDelay { get; set; }
+
+    /// <summary>Time spent waiting for a concurrency slot. Filled by M7 (Limits); zero until then.</summary>
+    public TimeSpan QueueWait { get; set; }
+
+    /// <summary>Name of the fault rule that fired on this exchange (M7); null when none did.</summary>
+    public string? FaultRule { get; set; }
+
+    /// <summary>True once a handler asked the crypto engine about the key (so the inspector may read the key's type, size and usage counters).</summary>
+    public bool EngineCalled { get; set; }
+
+    /// <summary>1 for the first exchange on its connection, 2 for the next one, and so on; 0 when the exchange has no captured connection.</summary>
+    public int RequestNumberOnConnection { get; set; }
+
     /// <summary>Type name (never the message) of an unexpected exception, for the log.</summary>
     public string? UnexpectedExceptionType { get; set; }
 

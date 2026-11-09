@@ -32,7 +32,7 @@ internal sealed class EkmExchangeMiddleware
         var exchange = new EkmRequestContext(_counter.Next(), context.Connection.Id, _time.GetUtcNow(), Stopwatch.GetTimestamp());
         context.Features.Set(exchange);
         exchange.Connection = _connections.TryGet(context.Connection.Id);
-        exchange.Connection?.RequestStarted();
+        exchange.RequestNumberOnConnection = (int)(exchange.Connection?.RequestStarted() ?? 0);
         try
         {
             await _next(context).ConfigureAwait(false);
@@ -117,7 +117,8 @@ internal static class EkmPipeline
 
         app.UseWhen(context => ports.IsEkmPort(context.Connection.LocalPort), branch =>
         {
-            // [M4] RequestCapture goes before the exchange middleware: it must see rejected requests too.
+            // RequestCapture (M4) is first: it must see every exchange, including the ones Route, Auth or the dispatcher reject.
+            branch.UseMiddleware<Inspector.InspectorCaptureMiddleware>();
             branch.UseMiddleware<EkmExchangeMiddleware>();
 
             // Routing is resolved early because faults (per namespace/key/op) and auth (per namespace) both need it.
@@ -141,8 +142,8 @@ internal static class EkmPipeline
 }
 
 /// <summary>
-/// The structured request log line (spec 9) with the fields that exist at this milestone. It is built from fixed fields only:
-/// never <c>value</c>, <c>n</c>, <c>e</c>, bodies or headers. <c>client_cn</c> and <c>injected_delay_ms</c> arrive with M3/M7.
+/// The structured request log line (spec 9): every field of the spec list (<c>injected_delay_ms</c> is zero until M7). It is built from fixed fields only:
+/// never <c>value</c>, <c>n</c>, <c>e</c>, bodies or headers. The 150/250 ms warning and error levels of spec 9 are M7 (see DECISIONS "M4").
 /// </summary>
 internal static class EkmExchangeLog
 {
@@ -177,6 +178,7 @@ internal static class EkmExchangeLog
                 new("error_code", e.ErrorCode),
                 new("duration_ms", Math.Round(e.Duration.TotalMilliseconds, 3)),
                 new("crypto_ms", Math.Round(e.CryptoElapsed.TotalMilliseconds, 3)),
+                new("injected_delay_ms", Math.Round(e.InjectedDelay.TotalMilliseconds, 3)),
                 new("client_cn", e.Authentication?.CommonName),
                 new("auth_failure", e.Authentication is { Succeeded: false } auth ? auth.Failure.ToString() : null),
                 new("exception_type", e.UnexpectedExceptionType),

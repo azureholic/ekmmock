@@ -221,7 +221,9 @@ internal sealed class EkmAuthMiddleware
     {
         var exchange = context.GetEkmContext();
         var route = exchange.Route ?? throw new EkmProtocolException(ProxyErrorCode.NotFound);
+        var authStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         var result = _authorizer.Authorize(context, route.Namespace);
+        exchange.AuthElapsed = System.Diagnostics.Stopwatch.GetElapsedTime(authStarted);
         exchange.Authentication = result;
         if (!result.Succeeded)
         {

@@ -39,6 +39,7 @@ internal sealed class EkmHandlers
     public Task MetadataAsync(HttpContext context, KeyRef key, EkmRequestContext exchange)
     {
         var started = Stopwatch.GetTimestamp();
+        exchange.EngineCalled = true;
         KeyMetadata metadata;
         try
         {
@@ -125,6 +126,7 @@ internal sealed class EkmHandlers
             }
 
             var started = Stopwatch.GetTimestamp();
+            exchange.EngineCalled = true;
             try
             {
                 output = wrap
