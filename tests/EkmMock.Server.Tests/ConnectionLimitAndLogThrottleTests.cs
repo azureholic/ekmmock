@@ -231,8 +231,21 @@ public sealed class ConnectionLimitAndLogThrottleTests
             (await Wait.UntilAsync(() => capture.OpenCount == limit, TimeSpan.FromSeconds(10))).ShouldBeTrue($"{capture.OpenCount} connections registered");
 
             using var extra = new TcpClient();
-            await extra.ConnectAsync(IPAddress.Loopback, host.Port, TestContext.Current.CancellationToken);
-            var closed = await ReadsEndOfStreamAsync(extra, TimeSpan.FromSeconds(10));
+            var closed = false;
+            try
+            {
+                await extra.ConnectAsync(IPAddress.Loopback, host.Port, TestContext.Current.CancellationToken);
+            }
+            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionReset)
+            {
+                // Linux can observe the server's immediate abort before ConnectAsync completes.
+                closed = true;
+            }
+
+            if (!closed)
+            {
+                closed = await ReadsEndOfStreamAsync(extra, TimeSpan.FromSeconds(10));
+            }
 
             closed.ShouldBeTrue("the connection over the limit must be closed by the server");
             foreach (var client in held)
