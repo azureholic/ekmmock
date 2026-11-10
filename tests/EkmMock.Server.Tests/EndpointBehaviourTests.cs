@@ -438,13 +438,18 @@ public sealed class CipherPolicyTests : IClassFixture<MtlsFixture>
         var options = Options(TlsCipherSuite.TLS_AES_128_GCM_SHA256);
 
         var (stream, tcp) = await Host.ConnectTlsAsync(options);
+        int clientPort;
         using (stream)
         using (tcp)
         {
             stream.NegotiatedCipherSuite.ShouldBe(TlsCipherSuite.TLS_AES_128_GCM_SHA256);
+            clientPort = ((System.Net.IPEndPoint)tcp.Client.LocalEndPoint!).Port;
         }
 
-        (await Host.NextEventAsync(mark, ConnectionEventKind.HandshakeSucceeded))!.CipherSuite.ShouldBe("TLS_AES_128_GCM_SHA256");
+        // Match the event of THIS connection by the client's port: an earlier test in this class does not wait for its own handshake event, which can be published after this test's mark on a slow
+        // machine (seen once on a GitHub runner: the event of the previous test's AES-256 connection was picked up).
+        var succeeded = await Host.NextEventAsync(mark, ConnectionEventKind.HandshakeSucceeded, e => e.RemoteEndPoint is { } remote && remote.EndsWith($":{clientPort}", StringComparison.Ordinal));
+        succeeded.ShouldNotBeNull().CipherSuite.ShouldBe("TLS_AES_128_GCM_SHA256");
     }
 
     [Fact]
