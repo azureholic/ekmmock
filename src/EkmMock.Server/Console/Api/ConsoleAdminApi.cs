@@ -133,7 +133,8 @@ internal sealed class ConsoleMutationFilter : IEndpointFilter
 /// <summary>The REST API of keys, namespaces and trust, certificates, audit and About (spec 12), a thin layer over the same services the Blazor pages use.</summary>
 internal static class ConsoleAdminApi
 {
-    private const int MaxBodyBytes = 512 * 1024;
+    /// <summary>The largest body any console API endpoint reads (uploads of a trust JSON or a certificate chain with its key). Also the Kestrel limit of console requests (<see cref="ConsoleBodyLimitMiddleware"/>).</summary>
+    internal const int MaxBodyBytes = 512 * 1024;
 
     public static IResult Error(int status, string code, string message)
         => Results.Json(new ApiError(code, message), ConsoleAdminJsonContext.Default.ApiError, statusCode: status);
@@ -378,15 +379,23 @@ internal static class ConsoleAdminApi
 
         using var buffer = new MemoryStream();
         var chunk = new byte[8192];
-        int read;
-        while ((read = await http.Request.Body.ReadAsync(chunk, http.RequestAborted).ConfigureAwait(false)) > 0)
+        try
         {
-            if (buffer.Length + read > MaxBodyBytes)
+            int read;
+            while ((read = await http.Request.Body.ReadAsync(chunk, http.RequestAborted).ConfigureAwait(false)) > 0)
             {
-                throw new ConsoleActionException(ConsoleErrorCode.InvalidRequest, "The request body is too large.");
-            }
+                if (buffer.Length + read > MaxBodyBytes)
+                {
+                    throw new ConsoleActionException(ConsoleErrorCode.InvalidRequest, "The request body is too large.");
+                }
 
-            buffer.Write(chunk, 0, read);
+                buffer.Write(chunk, 0, read);
+            }
+        }
+        catch (Microsoft.AspNetCore.Http.BadHttpRequestException)
+        {
+            // A chunked body over the Kestrel limit (the same 512 KiB) is refused by the server while it is read: report it like the other "too large" cases, not as a 500.
+            throw new ConsoleActionException(ConsoleErrorCode.InvalidRequest, "The request body is too large.");
         }
 
         try

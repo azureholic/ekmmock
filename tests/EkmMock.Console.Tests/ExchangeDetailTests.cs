@@ -285,7 +285,7 @@ public sealed class ExchangeDetailTests : ConsoleTestBase
 
         SelectTab(cut, "request");
 
-        cut.Find("[data-role='tab-request']").TextContent.ShouldContain("truncated to the first 16 KiB");
+        cut.Find("[data-role='tab-request']").TextContent.ShouldContain("truncated (only the beginning is shown)");
         cut.FindAll("[data-role='body-json']").ShouldBeEmpty();
         cut.Find("[data-role='body-raw']").ShouldNotBeNull();
     }

@@ -39,6 +39,7 @@ CONSOLE_INSECURE=${CONSOLE_INSECURE:-0}        # 1 = do not verify the console c
 EKMMOCK=${EKMMOCK:-ekmmock}                    # how to start the CLI, for example "dotnet src/EkmMock.Cli/bin/Debug/net10.0/ekmmock.dll"
 EKMMOCK_CONSOLE_ARGS=${EKMMOCK_CONSOLE_ARGS:-} # extra console options for the CLI, for example "--auth entra --tenant <id> --client-id <id>" (ACI) ; a bearer token in $EKMMOCK_CONSOLE_TOKEN also works
 WORK_DIR=${WORK_DIR:-./e2e-work}               # artifacts: mhsm-client.json, results/*.md, exports (all git-ignored)
+SECRET_DIR=''                                  # a private temporary folder (mktemp -d, mode 700, umask 077) for the plaintext DEK and the request bodies that carry it; removed on exit
 AES_KEY=${AES_KEY:-aes-key-1}                  # external key identifiers in EkmMock (spec 11.2 sample keys)
 RSA_KEY=${RSA_KEY:-rsa-key-1}
 AES_REF=${AES_REF:-ekm-aes}                    # key reference names in Managed HSM
@@ -199,8 +200,10 @@ fingerprint() { openssl dgst -sha256 -r "$1" | cut -c1-12; }
 file_size() { wc -c <"$1" | tr -d ' '; }
 
 cleanup_files() {
-  if ((!DRY_RUN)) && [[ -d $WORK_DIR ]]; then
-    rm -f "$WORK_DIR"/dek.bin "$WORK_DIR"/unwrapped.bin "$WORK_DIR"/wrap-*.json "$WORK_DIR"/unwrap-*.json 2>/dev/null || true
+  if ((!DRY_RUN)) && [[ -n $SECRET_DIR && -d $SECRET_DIR ]]; then
+    # Best effort: overwrite, then delete the plaintext DEK and the request bodies that carry it.
+    find "$SECRET_DIR" -type f -exec shred -u {} + 2>/dev/null || true
+    rm -rf "$SECRET_DIR"
   fi
 }
 
@@ -219,6 +222,7 @@ setup_cli() {
   EKMMOCK_CMD=($EKMMOCK)
   CONSOLE_ARGS=(--console "$CONSOLE")
   if [[ $CONSOLE_INSECURE == 1 ]]; then
+    console_is_loopback || die "refusing --insecure-console for the non-loopback console $CONSOLE: pass --console-ca <the console certificate's root CA> instead"
     CONSOLE_ARGS+=(--insecure-console-cert)
   elif [[ -n $CONSOLE_CA ]]; then
     CONSOLE_ARGS+=(--console-ca "$CONSOLE_CA")
@@ -240,17 +244,36 @@ ekm_capture() {
   run_capture "$fake" "${EKMMOCK_CMD[@]}" "$@" "${CONSOLE_ARGS[@]}"
 }
 
+# console_is_loopback: true when the host of $CONSOLE is 127.0.0.1, localhost or [::1] (the only hosts for which certificate verification may be switched off).
+console_is_loopback() {
+  local rest=${CONSOLE#*://} host
+  rest=${rest%%/*}
+  case $rest in
+    \[*\]*) host=${rest%%]*}; host=${host#\[} ;;
+    *) host=${rest%%:*} ;;
+  esac
+  case $host in
+    127.0.0.1 | localhost | ::1) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # console_curl <METHOD> <path> [json body]: a direct call to the console API (needed for fault delays the CLI presets do not cover). Prints the response body.
 console_curl() {
   local method=$1 path=$2 body=${3:-}
-  local args=(--silent --show-error --fail-with-body --max-time 60 --request "$method" --header 'Accept: application/json')
+  local args=(--silent --show-error --fail-with-body --max-time 60 --request "$method" --header 'Accept: application/json') use_token=0
   if [[ $CONSOLE_INSECURE == 1 ]]; then
+    # --insecure only ever for a loopback console (the same rule as the CLI's --insecure-console-cert); checked again here as a second line of defence.
+    console_is_loopback || die "refusing --insecure for the non-loopback console $CONSOLE: pass --console-ca <the console certificate's root CA> instead"
     args+=(--insecure)
   elif [[ -n $CONSOLE_CA ]]; then
     args+=(--cacert "$CONSOLE_CA")
   fi
   if [[ -n ${EKMMOCK_CONSOLE_TOKEN:-} ]]; then
-    args+=(--header "Authorization: Bearer ${EKMMOCK_CONSOLE_TOKEN}")
+    # The bearer token must not appear in argv (visible to every user through ps and /proc): curl reads it from a config on standard input (--config -), written by the printf builtin.
+    case $EKMMOCK_CONSOLE_TOKEN in *[!A-Za-z0-9._~+/=-]*) die "EKMMOCK_CONSOLE_TOKEN contains characters that are not valid in a bearer token" ;; *) ;; esac
+    args+=(--config -)
+    use_token=1
   else
     args+=(--header 'X-EkmMock-Client: ekmmock-cli')
   fi
@@ -265,7 +288,11 @@ console_curl() {
     printf '{}'
     return 0
   fi
-  curl "${args[@]}" "$CONSOLE$path"
+  if ((use_token)); then
+    printf 'header = "Authorization: Bearer %s"\n' "$EKMMOCK_CONSOLE_TOKEN" | curl "${args[@]}" "$CONSOLE$path"
+  else
+    curl "${args[@]}" "$CONSOLE$path"
+  fi
 }
 
 # save_console <path> <file>: GET a console API path into a file (a warning when it fails; only printed in --dry-run).
@@ -316,17 +343,31 @@ write_body() {
   )
 }
 
+# ensure_secret_dir: the DEK and the bodies that contain it never go into $WORK_DIR (which is kept, and may sit in a synced or shared folder): they live in a private mktemp folder.
+ensure_secret_dir() {
+  [[ -z $SECRET_DIR ]] || return 0
+  if ((DRY_RUN)); then
+    printf '+ (umask 077; mktemp -d %s/ekmmock-e2e.XXXXXX)\n' "${TMPDIR:-/tmp}" >&2
+    SECRET_DIR="${TMPDIR:-/tmp}/ekmmock-e2e.DRYRUN"
+  else
+    SECRET_DIR=$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/ekmmock-e2e.XXXXXX") || die "could not create a private temporary folder"
+    chmod 700 "$SECRET_DIR"
+  fi
+}
+
 ensure_work_dir() {
   if ((DRY_RUN)); then
     printf '+ mkdir -p %s\n' "$WORK_DIR" >&2
   else
     mkdir -p "$WORK_DIR/results"
   fi
+  ensure_secret_dir
 }
 
 new_dek() {
-  run openssl rand -out "$WORK_DIR/dek.bin" 32
-  if ((!DRY_RUN)); then chmod 600 "$WORK_DIR/dek.bin"; fi
+  ensure_secret_dir
+  (umask 077 && run openssl rand -out "$SECRET_DIR/dek.bin" 32)
+  if ((!DRY_RUN)); then chmod 600 "$SECRET_DIR/dek.bin"; fi
 }
 
 # ---------------------------------------------------------------------------------------------------------------------------------
@@ -495,29 +536,29 @@ roundtrip_one() {
   new_dek
   local dek_b64u='' fp='' length=''
   if ((!DRY_RUN)); then
-    dek_b64u=$(b64url <"$WORK_DIR/dek.bin")
-    fp=$(fingerprint "$WORK_DIR/dek.bin")
-    length=$(file_size "$WORK_DIR/dek.bin")
+    dek_b64u=$(b64url <"$SECRET_DIR/dek.bin")
+    fp=$(fingerprint "$SECRET_DIR/dek.bin")
+    length=$(file_size "$SECRET_DIR/dek.bin")
   fi
-  write_body "$alg" "$dek_b64u" "$WORK_DIR/wrap-$tag.json" "base64url of a random 32-byte DEK"
+  write_body "$alg" "$dek_b64u" "$SECRET_DIR/wrap-$tag.json" "base64url of a random 32-byte DEK"
   local wrapped
   wrapped=$(run_capture "<wrapped-value>" az rest --method POST --resource https://managedhsm.azure.net \
-    --uri "$(mhsm_uri "$ref" wrapkey)" --headers Content-Type=application/json --body "@$WORK_DIR/wrap-$tag.json" --query value --output tsv) || die "wrapkey failed for $ref ($alg)"
-  write_body "$alg" "$wrapped" "$WORK_DIR/unwrap-$tag.json" "the wrapped value from the previous step"
+    --uri "$(mhsm_uri "$ref" wrapkey)" --headers Content-Type=application/json --body "@$SECRET_DIR/wrap-$tag.json" --query value --output tsv) || die "wrapkey failed for $ref ($alg)"
+  write_body "$alg" "$wrapped" "$SECRET_DIR/unwrap-$tag.json" "the wrapped value from the previous step"
   local unwrapped
   unwrapped=$(run_capture "<unwrapped-value>" az rest --method POST --resource https://managedhsm.azure.net \
-    --uri "$(mhsm_uri "$ref" unwrapkey)" --headers Content-Type=application/json --body "@$WORK_DIR/unwrap-$tag.json" --query value --output tsv) || die "unwrapkey failed for $ref ($alg)"
+    --uri "$(mhsm_uri "$ref" unwrapkey)" --headers Content-Type=application/json --body "@$SECRET_DIR/unwrap-$tag.json" --query value --output tsv) || die "unwrapkey failed for $ref ($alg)"
   if ((DRY_RUN)); then
     say "[dry-run] would compare the unwrapped value with the original DEK and print only its length and SHA-256 fingerprint"
     return 0
   fi
-  b64url_decode "$unwrapped" >"$WORK_DIR/unwrapped.bin"
-  chmod 600 "$WORK_DIR/unwrapped.bin"
-  if cmp -s "$WORK_DIR/dek.bin" "$WORK_DIR/unwrapped.bin"; then
+  b64url_decode "$unwrapped" >"$SECRET_DIR/unwrapped.bin"
+  chmod 600 "$SECRET_DIR/unwrapped.bin"
+  if cmp -s "$SECRET_DIR/dek.bin" "$SECRET_DIR/unwrapped.bin"; then
     say "PASS: $ref $alg: the unwrapped DEK equals the original ($length bytes, fingerprint $fp; the console shows the same fingerprint on the wrapkey request and the unwrapkey response)"
     record roundtrip "| $ref | $alg | $length | $fp | PASS | $(stamp) |"
   else
-    say "FAIL: $ref $alg: the unwrapped DEK differs from the original (original fp $fp, returned fp $(fingerprint "$WORK_DIR/unwrapped.bin"))"
+    say "FAIL: $ref $alg: the unwrapped DEK differs from the original (original fp $fp, returned fp $(fingerprint "$SECRET_DIR/unwrapped.bin"))"
     record roundtrip "| $ref | $alg | $length | $fp | FAIL | $(stamp) |"
     return 1
   fi
@@ -541,22 +582,22 @@ cmd_roundtrip() {
 # Scenarios
 # ---------------------------------------------------------------------------------------------------------------------------------
 
-# prepare_unwrap <ref> <alg> <tag>: wraps a fresh DEK once and writes the unwrap body $WORK_DIR/unwrap-<tag>.json; the wrapped value is ciphertext.
+# prepare_unwrap <ref> <alg> <tag>: wraps a fresh DEK once and writes the unwrap body $SECRET_DIR/unwrap-<tag>.json; the wrapped value is ciphertext.
 prepare_unwrap() {
   local ref=$1 alg=$2 tag=$3 dek_b64u=''
   new_dek
-  if ((!DRY_RUN)); then dek_b64u=$(b64url <"$WORK_DIR/dek.bin"); fi
-  write_body "$alg" "$dek_b64u" "$WORK_DIR/wrap-$tag.json" "base64url of a random 32-byte DEK"
+  if ((!DRY_RUN)); then dek_b64u=$(b64url <"$SECRET_DIR/dek.bin"); fi
+  write_body "$alg" "$dek_b64u" "$SECRET_DIR/wrap-$tag.json" "base64url of a random 32-byte DEK"
   local wrapped
   wrapped=$(run_capture "<wrapped-value>" az rest --method POST --resource https://managedhsm.azure.net --uri "$(mhsm_uri "$ref" wrapkey)" \
-    --headers Content-Type=application/json --body "@$WORK_DIR/wrap-$tag.json" --query value --output tsv) || die "could not wrap a DEK with $ref"
-  write_body "$alg" "$wrapped" "$WORK_DIR/unwrap-$tag.json" "the wrapped value"
+    --headers Content-Type=application/json --body "@$SECRET_DIR/wrap-$tag.json" --query value --output tsv) || die "could not wrap a DEK with $ref"
+  write_body "$alg" "$wrapped" "$SECRET_DIR/unwrap-$tag.json" "the wrapped value"
 }
 
 unwrap_try() {
   local ref=$1 tag=$2
   try az rest --method POST --resource https://managedhsm.azure.net --uri "$(mhsm_uri "$ref" unwrapkey)" \
-    --headers Content-Type=application/json --body "@$WORK_DIR/unwrap-$tag.json" --query value --output none
+    --headers Content-Type=application/json --body "@$SECRET_DIR/unwrap-$tag.json" --query value --output none
 }
 
 azure_side_kql() {
@@ -614,7 +655,7 @@ cmd_sweep() {
   step "scenario: latency sweep, injected delays: $SWEEP_DELAYS ms (spec 15)"
   require_settings
   ensure_work_dir
-  say "Needs the server started with EKMMOCK_ENABLE_FAULTS=true (the VM template does by default). Each step injects one delay rule, runs $SWEEP_CALLS unwraps, removes the rule."
+  say "Needs the server started with EKMMOCK_ENABLE_FAULTS=true (the VM template: parameter enableFaultInjection = true; default false). Each step injects one delay rule, runs $SWEEP_CALLS unwraps, removes the rule."
   prepare_unwrap "$AES_REF" "${AES_ALGS%% *}" sweep
   record sweep "| injected delay (ms) | unwraps ok / total | first Azure-side error | EkmMock exchanges (saved) |"
   record sweep "|---|---|---|---|"

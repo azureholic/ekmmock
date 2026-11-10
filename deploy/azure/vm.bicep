@@ -49,7 +49,7 @@ param adminUsername string = 'azureuser'
 @minLength(40)
 param sshPublicKey string
 
-@description('The only source address allowed to reach SSH (port 22): your public IP address or a CIDR range, for example "203.0.113.7" or "203.0.113.0/28". There is deliberately no default. "*", "Internet", "Any" and "0.0.0.0/0" are rejected.')
+@description('The only source address allowed to reach SSH (port 22): ONE IPv4 address or an IPv4 CIDR range no wider than /16 (for example "203.0.113.7" or "203.0.113.0/28"), or one IPv6 address or an IPv6 range no wider than /48. There is deliberately no default. Anything else is rejected (the deployment fails): "*", "Internet" and every other service tag, "Any", "0.0.0.0/0", host names, lists, and ranges that are too wide.')
 @minLength(7)
 @maxLength(43)
 param allowedSshSourceAddress string
@@ -77,10 +77,10 @@ param containerImage string = 'ekmmock:local'
 @maxLength(255)
 param repoUrl string = 'https://github.com/azureholic/ekmmock.git'
 
-@description('With imageSource "build": the branch, tag or full commit SHA to build. For a reproducible deployment use a tag or a 40-character commit SHA instead of the moving branch "main".')
+@description('With imageSource "build": the git tag or full 40-character commit SHA to build. There is deliberately no usable default: the placeholder below makes a "build" deployment fail until you choose one explicitly, so nobody deploys whatever a moving branch such as "main" points to by accident. With imageSource "pull" the value is not used. A branch name is accepted but not recommended: the deployment is then not reproducible.')
 @minLength(1)
 @maxLength(255)
-param repoRef string = 'main'
+param repoRef string = '<REPLACE-WITH-TAG-OR-SHA>'
 
 @description('With imageSource "pull" from a private registry: the registry user name (empty for a public image).')
 param registryUsername string = ''
@@ -92,8 +92,8 @@ param registryPassword string = ''
 @description('Generate a test root CA and a server certificate for the FQDN on the first boot (recommended). Set to false to bring your own certificate: copy server.crt and server.key to /opt/ekmmock/data/tls on the VM and run "sudo /opt/ekmmock/bin/ekmmock-vm.sh run".')
 param generateTestCertificate bool = true
 
-@description('Start the container with EKMMOCK_ENABLE_FAULTS=true so that the console and CLI can inject delays, errors, HSM-offline and blackhole faults (needed for the spec 15 scenarios). Rules can only be created from the loopback-only console. Set to false for a quiet endpoint.')
-param enableFaultInjection bool = true
+@description('Start the container with EKMMOCK_ENABLE_FAULTS=true so that the console and CLI can inject delays, errors, HSM-offline and blackhole faults (needed for the spec 15 scenarios; set it to true for those). Off by default: a quiet endpoint is the safe default, and the same default as aci.bicep. Rules can only be created from the loopback-only console.')
+param enableFaultInjection bool = false
 
 @description('Type of the OS disk. StandardSSD_LRS is a cheap default; the data (key store, certificates, audit log) lives on this disk under /opt/ekmmock/data. Disks are encrypted at rest with platform-managed keys (the Azure default).')
 @allowed([
@@ -134,28 +134,53 @@ var resourceTags = union(
 // The public FQDN is known before the IP exists: <label>.<region>.cloudapp.azure.com (public Azure regions only; EKM is not available in sovereign clouds).
 var fqdn = '${dnsLabel}.${location}.cloudapp.azure.com'
 
-// Fail the deployment when the SSH source is open to the world (Bicep has no assert for deployments and no regex validator). When the value is "open", substring() is asked for more
-// characters than the string has, which makes ARM reject the deployment ("The index and length parameters must refer to a location within the string"); otherwise it returns the trimmed address unchanged.
+// Fail the deployment unless the SSH source is a positively valid, narrow address (Bicep has no assert for deployments and no regex): ONE IPv4 address or an IPv4 CIDR with a prefix of /16..../32,
+// or ONE IPv6 address or an IPv6 CIDR with a prefix of /48../128. Service tags ("Internet", "VirtualNetwork"), wildcards, "any", host names and lists are not addresses, so they fail the
+// checks below. When the value is not acceptable, substring() is asked for more characters than the string has, which makes ARM reject the deployment ("The index and length parameters
+// must refer to a location within the string"); otherwise it returns the trimmed address unchanged. The rule is mirrored, case by case, in tests/EkmMock.Server.Tests/SshSourceRuleTests.cs.
 var sshSourceTrimmed = trim(allowedSshSourceAddress)
-var sshSourceIsOpen = contains(
-  [
-    '*'
-    '0.0.0.0'
-    '0.0.0.0/0'
-    '::/0'
-    'internet'
-    'any'
-  ],
-  toLower(sshSourceTrimmed)
-)
-var sshSourceChecked = substring(sshSourceTrimmed, 0, sshSourceIsOpen ? 100000 : length(sshSourceTrimmed))
-// cloud-init document: every token in cloud-init.yaml is replaced by a BASE64 value, so a parameter can never inject YAML or shell. vm-setup.sh is the script they configure.
+var sshParts = split(sshSourceTrimmed, '/')
+var sshAddress = sshParts[0]
+var sshHasPrefix = length(sshParts) == 2
+var sshPrefix = sshHasPrefix ? sshParts[1] : ''
+var sshIsIpv6 = contains(sshAddress, ':')
+// A prefix length: 1 or 2 digits without a leading zero, inside [floor, ceiling]. Digits are checked first so that int() never sees anything else (ARM evaluates only the chosen branch of if()).
+var sshPrefixIsDigits = !empty(sshPrefix) && length(sshPrefix) <= 3 && empty(filter(
+  map(range(0, length(sshPrefix)), i => substring(sshPrefix, i, 1)),
+  c => !contains('0123456789', c)
+)) && (length(sshPrefix) == 1 || !startsWith(sshPrefix, '0'))
+var sshPrefixValue = sshPrefixIsDigits ? int(sshPrefix) : -1
+var sshIpv4Octets = split(sshAddress, '.')
+var sshIpv4OctetsValid = length(sshIpv4Octets) == 4 && empty(filter(
+  sshIpv4Octets,
+  octet =>
+    !(!empty(octet) && length(octet) <= 3 && empty(filter(
+        map(range(0, length(octet)), i => substring(octet, i, 1)),
+        c => !contains('0123456789', c)
+      )) && (length(octet) == 1 || !startsWith(octet, '0'))
+      ? int(octet) <= 255
+      : false)
+))
+var sshIpv4Valid = !sshIsIpv6 && sshIpv4OctetsValid && sshAddress != '0.0.0.0' && (!sshHasPrefix || (sshPrefixValue >= 16 && sshPrefixValue <= 32))
+var sshIpv6Groups = split(sshAddress, ':')
+var sshIpv6Valid = sshIsIpv6 && empty(filter(
+  map(range(0, length(sshAddress)), i => substring(sshAddress, i, 1)),
+  c => !contains('0123456789abcdefABCDEF:', c)
+)) && length(sshIpv6Groups) >= 3 && length(sshIpv6Groups) <= 8 && empty(filter(
+  sshIpv6Groups,
+  group => length(group) > 4
+)) && length(split(sshAddress, '::')) <= 2 && !contains(sshAddress, ':::') && sshAddress != '::' && (!sshHasPrefix || (sshPrefixValue >= 48 && sshPrefixValue <= 128))
+var sshSourceIsAcceptable = length(sshParts) <= 2 && (sshIpv4Valid || sshIpv6Valid)
+var sshSourceChecked = substring(sshSourceTrimmed, 0, sshSourceIsAcceptable ? length(sshSourceTrimmed) : 100000)
+// The git ref to build: the placeholder default must be replaced (same guard technique as above; only when the image is built on the VM).
+var repoRefIsPlaceholder = imageSource == 'build' && startsWith(repoRef, '<')
+var repoRefChecked = substring(repoRef, 0, repoRefIsPlaceholder ? 100000 : length(repoRef)) // cloud-init document: every token in cloud-init.yaml is replaced by a BASE64 value, so a parameter can never inject YAML or shell. vm-setup.sh is the script they configure.
 var cloudInitTokens = [
   { token: '@@FQDN@@', value: base64(fqdn) }
   { token: '@@IMAGE_SOURCE@@', value: base64(imageSource) }
   { token: '@@CONTAINER_IMAGE@@', value: base64(containerImage) }
   { token: '@@REPO_URL@@', value: base64(repoUrl) }
-  { token: '@@REPO_REF@@', value: base64(repoRef) }
+  { token: '@@REPO_REF@@', value: base64(repoRefChecked) }
   { token: '@@GENERATE_CERTIFICATE@@', value: base64(generateTestCertificate ? 'true' : 'false') }
   { token: '@@ENABLE_FAULTS@@', value: base64(enableFaultInjection ? 'true' : 'false') }
   { token: '@@REGISTRY_USER@@', value: base64(registryUsername) }

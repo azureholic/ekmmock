@@ -119,9 +119,15 @@ internal static class ConsoleAccessPolicy
             return false;
         }
 
-        // A multi-tenant misconfiguration must not let another tenant's user in: when the claim is present it has to be ours.
+        // The tenant claim is ALWAYS enforced (security review L2): a multi-tenant misconfiguration must not let another tenant's user in, and a token without a tenant claim is not ours either.
+        // The configured tenant has to be a GUID (refused at startup otherwise); if it somehow is not, nobody is allowed (fail closed) instead of everybody.
+        if (!ConsoleConfigurationValidator.TryParseTenantId(options.TenantId, out var configuredTenant))
+        {
+            return false;
+        }
+
         var tenant = principal.FindFirstValue(ConsoleClaims.TenantId) ?? principal.FindFirstValue(ConsoleClaims.TenantIdLong);
-        if (tenant is not null && Guid.TryParse(options.TenantId, out var configuredTenant) && !(Guid.TryParse(tenant, out var actual) && actual == configuredTenant))
+        if (!ConsoleConfigurationValidator.TryParseTenantId(tenant, out var actual) || actual != configuredTenant)
         {
             return false;
         }

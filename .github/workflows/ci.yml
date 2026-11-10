@@ -291,6 +291,25 @@ jobs:
           done
           exit "$status"
 
+      - name: Bicep format (no diff)
+        run: |
+          set -euo pipefail
+          for template in vm aci; do
+            az bicep format --file "deploy/azure/${template}.bicep" --outfile "$RUNNER_TEMP/${template}.formatted.bicep"
+            diff -u "deploy/azure/${template}.bicep" "$RUNNER_TEMP/${template}.formatted.bicep"
+          done
+
+      - name: Set up .NET (for the template rule tests)
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Evaluate the SSH source rule and the repoRef guard with the real template (bicep snapshot)
+        env:
+          # Without the Bicep CLI these tests would skip; here a missing CLI is a failure. az bicep install (above) put it in ~/.azure/bin.
+          EKMMOCK_REQUIRE_BICEP: 'true'
+        run: dotnet test --project tests/EkmMock.Server.Tests --configuration Release --filter-class "*SshSourceRuleTests"
+
       - name: Build the example parameter files (placeholders only, dummy secrets)
         run: |
           set -euo pipefail

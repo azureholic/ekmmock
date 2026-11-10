@@ -90,6 +90,7 @@ public sealed class MtlsChainVerdictCacheTests : IDisposable
         context.Features.Set<ITlsConnectionFeature>(feature);
 
         var state = setup.Registry.Open(new DefaultConnectionContext(connectionId));
+        state.SetClientCertificateVerdict(new HandshakeVerdict(true, "NoError", [], ClientCertificateSummary.From(client).ThumbprintSha256));
         state.CompleteHandshake("TLS 1.3", "TLS_AES_256_GCM_SHA384", null, null, ClientCertificateSummary.From(client), TimeSpan.FromMilliseconds(1));
         return setup.Authorizer.Authorize(context, ns);
     }

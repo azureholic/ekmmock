@@ -21,6 +21,12 @@
 //   4. The public IP of a container group cannot be placed behind an NSG; nothing at the ACI level restricts who can connect. Mutual TLS (client certificate CN + root CA allow-list in the
 //      app) is the access control for the EKM port, Entra ID for the console port.
 //   5. A secret volume is read-only, so uploading a new certificate in the console cannot persist it; renew the certificate by redeploying with new serverCertificatePem/serverCertificateKeyPem.
+//   6. ANYONE WHO HOLDS THE STORAGE ACCOUNT KEY (the account needs shared-key access for the SMB mount, and the key can be read by anyone with the Contributor/Storage Account Key Operator
+//      role on the account) can read the /data share. That share holds the ASP.NET Data Protection key ring of the console, which is NOT encrypted at rest (open question 63), so such a
+//      person can forge a console session cookie (and read the key store file, whose key blobs stay encrypted under the master key). The storage account is hardened as far as the ACI mount allows
+//      (TLS 1.2 minimum, HTTPS only, no public blob access) but it has NO network deny rule: ACI cannot be named in a storage firewall without a VNet, and a deny rule would break the mount.
+//      Treat the storage account key like the console's admin password: restrict who has the Contributor/Storage Account Key Operator role, rotate the key (az storage account keys renew,
+//      then redeploy) when someone leaves, and prefer the VM model, or a later VNet-integrated variant with a storage service endpoint, when this matters.
 //
 // DO NOT put a TLS-terminating front end (Application Gateway, Front Door, Container Apps HTTP ingress) in front of the EKM endpoint: the app must see the Managed HSM client certificate
 // itself. This template deliberately contains none. No Private Link IaC either (spec 11.4: later). Container Apps, AKS and App Service are not supported targets.
@@ -158,6 +164,11 @@ var environmentVariables = concat(
     { name: 'Tls__KeyFile', value: '/run/ekmmock-tls/server.key' }
     { name: 'EKMMOCK_ENABLE_FAULTS', value: enableFaultInjection ? 'true' : 'false' }
     { name: 'EKMMOCK_ALLOW_KEY_IMPORT', value: 'false' }
+    // Inspector memory bounds for the small container (2 GiB by default): the ring buffer holds at most 2000 exchanges AND about 32 MiB (estimated); the capture queue 1024 records.
+    // Anonymous internet traffic reaches the inspector, so it is bounded in bytes, not only in count (docs/DECISIONS.md "Security review follow-up").
+    { name: 'Inspector__RingBufferSize', value: '2000' }
+    { name: 'Inspector__MaxBytes', value: '33554432' }
+    { name: 'Inspector__ChannelCapacity', value: '1024' }
     // Secrets: secureValue is never returned by the ACI API and never shown in the portal.
     { name: 'EKMMOCK_MASTER_KEY', secureValue: masterKey }
     { name: 'EKMMOCK_CONSOLE_CLIENT_SECRET', secureValue: entraClientSecret }

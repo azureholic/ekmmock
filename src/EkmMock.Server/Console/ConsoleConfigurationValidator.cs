@@ -111,11 +111,24 @@ internal static class ConsoleConfigurationValidator
         }
     }
 
+    /// <summary>Parses a tenant ID strictly: the 36-character GUID form only (no braces, no missing hyphens, no aliases such as "common").</summary>
+    internal static bool TryParseTenantId(string? value, out Guid tenant)
+    {
+        tenant = Guid.Empty;
+        return value is { Length: > 0 } && Guid.TryParseExact(value.Trim(), "D", out tenant) && tenant != Guid.Empty;
+    }
+
     private static void ValidateEntra(EntraIdOptions entra, Func<string, string?>? environment, List<string> problems)
     {
         if (string.IsNullOrWhiteSpace(entra.TenantId))
         {
             problems.Add("Console:Auth=EntraId requires Console:EntraId:TenantId.");
+        }
+        else if (!TryParseTenantId(entra.TenantId, out _))
+        {
+            problems.Add(
+                "Console:EntraId:TenantId must be the tenant's directory ID as a GUID in the form 00000000-0000-0000-0000-000000000000. The console checks the token's tenant claim (tid) against it on every request, " +
+                "which only works with the real tenant ID: 'common', 'organizations', 'consumers' and domain names are refused.");
         }
 
         if (string.IsNullOrWhiteSpace(entra.ClientId))

@@ -54,7 +54,22 @@ public sealed class IssuedCertificate : IDisposable
         var certFile = Path.Combine(directory, name + ".crt");
         var keyFile = Path.Combine(directory, name + ".key");
         File.WriteAllText(certFile, ChainPem);
-        File.WriteAllText(keyFile, PrivateKeyPem);
+
+        // The private key is created readable by its owner only (Unix mode 0600, a current-user-only ACL on Windows) before any content is written, like every other secret file
+        // (security review I8). An existing key file is rewritten in place so that it keeps the permissions it already has (and a reader that watches it never sees it missing).
+        if (File.Exists(keyFile))
+        {
+            File.WriteAllText(keyFile, PrivateKeyPem);
+            if (!OperatingSystem.IsWindows())
+            {
+                File.SetUnixFileMode(keyFile, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            }
+        }
+        else
+        {
+            SecureFile.WriteSecret(keyFile, PrivateKeyPem);
+        }
+
         return (certFile, keyFile);
     }
 

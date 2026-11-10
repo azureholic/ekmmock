@@ -261,6 +261,7 @@ internal sealed class AboutService : IAboutService
         var inspector = _inspectorOptions.Value;
         Add("Inspector", "SecretDisplay", inspector.SecretDisplay);
         Add("Inspector", "RingBufferSize", inspector.RingBufferSize);
+        Add("Inspector", "MaxBytes", inspector.MaxBytes);
         Add("Inspector", "ChannelCapacity", inspector.ChannelCapacity);
         Add("Inspector", "Persist", inspector.Persist);
         Add("Inspector", "RetainDays", inspector.RetainDays);
@@ -268,6 +269,7 @@ internal sealed class AboutService : IAboutService
         Add("Limits", "LatencyWarningMs", _limits.Value.LatencyWarningMs);
         Add("Limits", "InternalDeadlineMs", _limits.Value.InternalDeadlineMs);
         Add("Limits", "MaxConcurrency", _limits.Value.MaxConcurrency);
+        Add("Limits", "MaxConnections", _limits.Value.MaxConnections);
 
         Add("Environment flags", "EKMMOCK_ALLOW_KEY_IMPORT", _engine.AllowKeyImport);
         Add("Environment flags", InspectorOptions.AllowRevealVariable, _inspector.Status().RevealAllowed || EnvironmentRevealGate.IsEnvironmentFlagSet());

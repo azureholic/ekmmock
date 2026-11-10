@@ -17,7 +17,10 @@ internal enum ConsoleErrorCode
     /// <summary>The thing the action needs is not available right now (EKM listener not bound, engine unavailable).</summary>
     Unavailable,
 
-    /// <summary>The audit entry could not be written. The action has already been applied when this is raised for a completed change.</summary>
+    /// <summary>
+    /// The audit entry could not be written. For an action that is audited <em>before</em> it is applied (<see cref="AuditRecorder.Intend{T}"/>) nothing was changed when this is raised;
+    /// for the few that are still audited afterwards (DECISIONS "Security review follow-up", L3) the change has already been applied.
+    /// </summary>
     AuditUnavailable,
 
     /// <summary>Fault injection is not switched on in this process (<c>EKMMOCK_ENABLE_FAULTS</c> is not <c>true</c>): rules cannot be created or changed.</summary>
@@ -111,6 +114,12 @@ internal static class AuditActions
     public const string FaultDisable = "fault.disable";
     public const string FaultClear = "fault.clear";
     public const string FaultPreset = "fault.preset";
+    /// <summary>
+    /// The outcome marker of an action that was audited first and then failed while being applied (security review L3): target is the action's target, the detail names the action and the
+    /// reason. Deliberately not in <see cref="All"/>: it is not an action a user takes, it says that the entry before it did not take effect.
+    /// </summary>
+    public const string ActionFailed = "action.failed";
+
     // Written by the inspector service (M4); listed so the Audit page can offer them in its filter.
     public const string InspectorReveal = "inspector.reveal";
     public const string InspectorRevealDenied = "inspector.reveal.denied";
@@ -152,6 +161,60 @@ internal sealed class AuditRecorder
             throw new ConsoleActionException(ConsoleErrorCode.AuditUnavailable, "The audit log could not be written. The change was applied but is not recorded; check the data volume.");
         }
     }
+
+    /// <summary>
+    /// Audit first, then change (security review L3). The entry (who, what, which target) is written <em>before</em> <paramref name="apply"/> runs, so a failing audit write is loud and
+    /// <b>consistent</b>: nothing was changed (<see cref="ConsoleErrorCode.AuditUnavailable"/>, "nothing was changed"). If the change itself then fails, a second entry
+    /// (<see cref="AuditActions.ActionFailed"/>) records the outcome and the original error is rethrown, so the log never claims a change that did not happen without saying so.
+    /// Callers validate (existence, confirmation, input) <em>before</em> calling this, so refused requests are not audited as attempts.
+    /// </summary>
+    public T Intend<T>(string actor, string action, string target, string? detail, Func<T> apply)
+    {
+        ArgumentNullException.ThrowIfNull(apply);
+        try
+        {
+            _audit.Append(actor, action, target, detail);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogError("The audit entry for {Action} could not be written ({ExceptionType}); the action was not performed.", action, exception.GetType().Name);
+            throw new ConsoleActionException(ConsoleErrorCode.AuditUnavailable, "The audit log could not be written, so nothing was changed. Check the data volume.");
+        }
+
+        try
+        {
+            return apply();
+        }
+        catch (Exception exception)
+        {
+            RecordFailure(actor, action, target, exception);
+            throw;
+        }
+    }
+
+    /// <inheritdoc cref="Intend{T}(string, string, string, string?, Func{T})"/>
+    public void Intend(string actor, string action, string target, string? detail, Action apply)
+    {
+        ArgumentNullException.ThrowIfNull(apply);
+        Intend<object?>(actor, action, target, detail, () =>
+        {
+            apply();
+            return null;
+        });
+    }
+
+    private void RecordFailure(string actor, string action, string target, Exception exception)
+    {
+        var reason = exception is ConsoleActionException console ? console.Code.ToString() : exception is EkmEngineException engine ? engine.Kind.ToString() : exception.GetType().Name;
+        try
+        {
+            _audit.Append(actor, AuditActions.ActionFailed, target, $"{action}: {reason}");
+        }
+        catch (Exception audit) when (audit is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogError("The outcome of {Action} (failed: {Reason}) could not be written to the audit log ({ExceptionType}).", action, reason, audit.GetType().Name);
+        }
+    }
 }
 
 /// <summary>Filters the audit log for the Audit page and <c>GET /api/console/audit</c>.</summary>
@@ -177,12 +240,18 @@ internal static class AuditQuery
 {
     public const int MaxTake = 500;
 
+    /// <summary>
+    /// How many of the newest entries a query looks at (security review L3): <c>ReadRecent</c> reads the file from its end, so a query costs this many lines at most, not the whole history
+    /// (it used to deserialise up to 100,000). Older entries are still in <c>audit.jsonl</c> and the rolled-over files on the data volume.
+    /// </summary>
+    public const int MaxScannedEntries = 10_000;
+
     /// <summary>Newest first, filtered, paged. The log itself is append-only; nothing here writes.</summary>
     public static AuditPage Query(this IAuditLog audit, AuditFilter? filter, int skip = 0, int take = 50)
     {
         take = Math.Clamp(take, 1, MaxTake);
         skip = Math.Max(0, skip);
-        var all = audit.ReadRecent(100_000);
+        var all = audit.ReadRecent(MaxScannedEntries);
         var matches = new List<AuditEntry>();
         for (var i = all.Count - 1; i >= 0; i--)
         {

@@ -100,14 +100,15 @@ Settings come from `appsettings.json` and environment variables (`Section__Key`,
 | `Endpoints:Ekm:Url` | `https://0.0.0.0:8443` | EKM listener. Publish as 443 (Docker `-p 443:8443`). In ACI there is no port remapping: set `https://0.0.0.0:443`. |
 | `Endpoints:Console:Url` | `https://127.0.0.1:8080` | Console listener (HTTPS). |
 | `Console:Auth` | `LoopbackOnly` | `LoopbackOnly` (no sign-in; **refuses to start** with a non-loopback bind) or `EntraId` (OIDC; required for any non-loopback bind). |
-| `Console:EntraId:TenantId`, `ClientId`, `AllowedObjectIds[]`, `AllowedGroupId` | empty | Entra sign-in and the allow-list. The client secret is **never** configuration (see below). |
+| `Console:EntraId:TenantId`, `ClientId`, `AllowedObjectIds[]`, `AllowedGroupId` | empty | Entra sign-in and the allow-list. `TenantId` must be the tenant's GUID (the console refuses to start otherwise) and the token's `tid` claim is always checked against it. The client secret is **never** configuration (see below). |
 | `Console:Tls:CertFile`, `KeyFile` | empty | Separate console certificate; otherwise the EKM server certificate is served. |
 | `Console:AllowedHosts[]` | empty | Extra `Host` header values accepted in LoopbackOnly (DNS-rebinding defence); localhost, 127.0.0.1, [::1] are always accepted. |
 | `Tls:CertFile`, `Tls:KeyFile`, `Tls:ServerName` | empty | EKM server certificate (PEM chain and key); hot-reloaded on file change and every 60 s. The SAN must equal the FQDN given to `--host`. |
 | `Data:Path` | `/data` | Key store, namespaces, audit log, inspector files, certificates, data-protection keys. The only writable place in the container. |
 | `SeedNamespaces[]` | `_default`, no trust | Namespaces and client trust seeded at first start. |
-| `Limits:LatencyBudgetMs`, `LatencyWarningMs`, `InternalDeadlineMs`, `MaxConcurrency` | 250, 150, 200, 64 | Budget colours and log levels, the internal deadline, the concurrency limit (over it: immediate 429). |
-| `Inspector:RingBufferSize`, `Persist`, `SecretDisplay`, ... | 10,000, `false`, `Masked` | Inspector ring buffer, JSONL files (always masked), DEK display mode. |
+| `Limits:LatencyBudgetMs`, `LatencyWarningMs`, `InternalDeadlineMs`, `MaxConcurrency`, `MaxConnections` | 250, 150, 200, 64, 1000 | Budget colours and log levels, the internal deadline, the concurrency limit (over it: immediate 429), the open connections accepted on the EKM listener (the next one is closed at once). |
+| `Inspector:RingBufferSize`, `MaxBytes`, `ChannelCapacity`, `Persist`, `SecretDisplay`, ... | 10,000, 128 MiB, 4096, `false`, `Masked` | Inspector ring buffer (bounded by record count **and** by estimated bytes: the oldest records are evicted until it fits), capture queue, JSONL files (always masked), DEK display mode. Exchanges from unauthenticated callers keep only 4 KiB of headers and 1 KiB of each body. |
+| `Audit:MaxFileBytes`, `MaxFiles` | 50 MiB, 5 | `audit.jsonl` is rolled over by size (`audit.1.jsonl` is the newest rolled file); this many rolled files are kept. |
 | `Metrics:AllowAnonymous` | `false` | Whether `/metrics` is served without console auth in EntraId mode. |
 | `Faults:BlackholeMaxHoldSeconds` | 600 | Cap on how long a blackholed request is held. |
 | `ProxyInfo:*` | `0.1-preview`, "Remco Test", "EkmMock v0.2.0", ... | The five `info` fields. |

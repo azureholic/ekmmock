@@ -166,6 +166,28 @@ internal sealed class ConsoleRequestGuardMiddleware
 }
 
 /// <summary>
+/// Kestrel's <c>MaxRequestBodySize</c> is server wide and set to 16 KiB for the EKM endpoint (spec 4.1). The console takes bigger uploads (a certificate chain with its key, a trust JSON: up to
+/// <see cref="ConsoleAdminApi.MaxBodyBytes"/>), so its branch raises the limit <em>for its own requests</em> through <c>IHttpMaxRequestBodySizeFeature</c>. The EKM branch never does (security review L10).
+/// A host without Kestrel (the in-process test server) has no such feature and is left alone.
+/// </summary>
+internal sealed class ConsoleBodyLimitMiddleware
+{
+    private readonly RequestDelegate _next;
+
+    public ConsoleBodyLimitMiddleware(RequestDelegate next) => _next = next;
+
+    public Task InvokeAsync(HttpContext context)
+    {
+        if (context.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>() is { IsReadOnly: false } feature)
+        {
+            feature.MaxRequestBodySize = ConsoleAdminApi.MaxBodyBytes;
+        }
+
+        return _next(context);
+    }
+}
+
+/// <summary>
 /// The console branch of the pipeline (spec 5.4, 7): runs only for connections on a console port (<see cref="IConsolePortPolicy"/>, by <c>HttpContext.Connection.LocalPort</c>,
 /// never by Host header), with its own routing, authentication, authorization, antiforgery and endpoints. Everything else on other ports is not served by it.
 /// </summary>
@@ -187,6 +209,7 @@ internal static class ConsolePipeline
 
         app.UseWhen(context => ports.IsConsolePort(context.Connection.LocalPort), branch =>
         {
+            branch.UseMiddleware<ConsoleBodyLimitMiddleware>();
             branch.UseMiddleware<ConsoleSecurityHeadersMiddleware>();
             branch.UseMiddleware<ConsoleRequestGuardMiddleware>();
             branch.UseExceptionHandler(handler => handler.Run(WriteGenericError));

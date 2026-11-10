@@ -37,7 +37,7 @@ Everything about how a **real** Managed HSM behaves is **not verified yet**; whe
 
 A restart takes the endpoint down for a few seconds; Managed HSM sees failing probes meanwhile (`EkmProxyAvailability` dips). **Do not restart during a test you want to measure.**
 
-**Data volume backup.** `/opt/ekmmock/data` (VM) or the `ekmmock-data` volume holds `keystore.json` (encrypted keys), `namespaces.json`, the audit log, certificates and the CA key. Stop the container, copy the folder, start it again (or take a disk snapshot).
+**Data volume backup.** `/opt/ekmmock/data` (VM) or the `ekmmock-data` volume holds `keystore.json` (encrypted keys), `namespaces.json`, the audit log and the certificates (the **VM's test CA private key is not there**: it is in `/opt/ekmmock/pki-private/root-ca.key`, root-only; back that file up separately if you want to be able to re-issue the server certificate under the same root). Stop the container, copy the folder, start it again (or take a disk snapshot).
 **A copy of `keystore.json` is useless without the master key, and the master key must not be stored next to it** (section 3). Azure-side note (Learn): Managed HSM does **not** support backup/restore of *external key references*; to recover one, recreate it. EkmMock's own volume is independent of that.
 
 ## 3. Master key custody and backup
@@ -63,15 +63,13 @@ The server certificate's **SAN must equal the FQDN** registered with `--host` (p
   az keyvault ekm-connection update --hsm-name <hsm> --server-ca-certificate old-and-new-roots.pem
   ```
 
-- **Re-issuing a test certificate on the VM** under the same root (the CA key stays in `/opt/ekmmock/data/pki`, owned by the container user):
+- **Re-issuing a test certificate on the VM** under the same root. The root CA **private key** is kept in `/opt/ekmmock/pki-private/root-ca.key` (root-owned, mode 0400) and is deliberately **not** under `/opt/ekmmock/data`, which is mounted into (and readable by) the container. One command does it: it copies the CA key into a private scratch folder, issues the certificate for the FQDN (plus `localhost` and `127.0.0.1`), installs it into `/opt/ekmmock/data/tls`, shreds the scratch folder and restarts the container:
 
   ```bash
-  FQDN=<fqdn>
-  sudo docker run --rm --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges:true -v /opt/ekmmock/data:/data --entrypoint ekmmock ekmmock:local \
-    certs server --ca /data/pki/root-ca.pem --ca-key /data/pki/root-ca.key --fqdn "$FQDN" --san localhost --san 127.0.0.1 --out /data/pki --force
-  sudo install -m 0600 -o 1654 -g 1654 /opt/ekmmock/data/pki/server.key /opt/ekmmock/data/tls/server.key
-  sudo install -m 0640 -o 1654 -g 1654 /opt/ekmmock/data/pki/server.crt /opt/ekmmock/data/tls/server.crt
+  sudo /opt/ekmmock/bin/ekmmock-vm.sh reissue
   ```
+
+  If `/opt/ekmmock/pki-private/root-ca.key` was deleted there is nothing to issue under: a new certificate then needs a new root, and the connection's root CA must be updated first (the "different root CA" case above). A VM created by an earlier version of the template has the key in `/opt/ekmmock/data/pki`; `ekmmock-vm.sh run`, `upgrade` or `reissue` moves it out once.
 
   The console's own "generate test PKI" button makes a **new root** whose key is discarded: use it only if you are going to update the connection's root CA.
 - Check what is served: `echo | openssl s_client -connect <fqdn>:443 -tls1_3 2>/dev/null | openssl x509 -noout -subject -enddate -ext subjectAltName` (without a client certificate the handshake still completes; every operation answers 401).
@@ -205,7 +203,7 @@ Managed HSM enforces a hard **250 ms** per-request budget end to end (it times o
 
 ## 10. Fault-injection playbook
 
-Faults exist only when the server was started with `EKMMOCK_ENABLE_FAULTS=true` (the VM template sets it by default; the compose file does not). Rules are global or scoped to a namespace, key and operation; they appear as badges in Live traffic and a banner on every page. **Always clear them afterwards.**
+Faults exist only when the server was started with `EKMMOCK_ENABLE_FAULTS=true` (the VM template sets it only with the parameter `enableFaultInjection = true`, default **false**, like the ACI template; the compose file does not). Rules are global or scoped to a namespace, key and operation; they appear as badges in Live traffic and a banner on every page. **Always clear them afterwards.**
 
 | Scenario | How | What you should see | Azure-side question (open: see RESULTS) |
 |---|---|---|---|

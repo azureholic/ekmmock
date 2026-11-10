@@ -83,6 +83,12 @@ public sealed class MtlsCallerAuthorizerUnitTests : IDisposable
     private static ConnectionState RecordHandshake(ConnectionRegistry registry, string connectionId, X509Certificate2? certificate)
     {
         var state = registry.Open(new DefaultConnectionContext(connectionId));
+        if (certificate is not null)
+        {
+            // What the handshake-time validation callback records for an accepted certificate.
+            state.SetClientCertificateVerdict(new HandshakeVerdict(true, "NoError", [], ClientCertificateSummary.From(certificate).ThumbprintSha256));
+        }
+
         state.CompleteHandshake("TLS 1.3", "TLS_AES_256_GCM_SHA384", null, null, certificate is null ? null : ClientCertificateSummary.From(certificate), TimeSpan.FromMilliseconds(1));
         return state;
     }
@@ -160,5 +166,135 @@ public sealed class MtlsCallerAuthorizerUnitTests : IDisposable
         var result = authorizer.Authorize(Context("c1", client.Certificate), new NamespaceDefinition { Name = "ghost" });
 
         result.Succeeded.ShouldBeFalse();
+    }
+
+    // ---- security review M1: the identity cross-check fails closed ----
+
+    [Fact]
+    public void ATlsRequestWhoseConnectionIsNotInTheRegistry_IsRejected_FailingClosed()
+    {
+        var (authorizer, _, ns) = Create();
+        using var client = _pki.ClientCaA.IssueClient(Cn);
+
+        var result = authorizer.Authorize(Context("unknown-connection", client.Certificate), ns);
+
+        result.Succeeded.ShouldBeFalse();
+        result.Failure.ShouldBe(AuthFailure.ConnectionStateMissing);
+    }
+
+    [Fact]
+    public void ARequestOnAConnectionWhoseHandshakeIsNotComplete_IsRejected_FailingClosed()
+    {
+        var (authorizer, registry, ns) = Create();
+        using var client = _pki.ClientCaA.IssueClient(Cn);
+        var state = registry.Open(new DefaultConnectionContext("c1")); // opened, handshake never completed
+        state.SetClientCertificateVerdict(new HandshakeVerdict(true, "NoError", [], ClientCertificateSummary.From(client.Certificate).ThumbprintSha256));
+
+        var result = authorizer.Authorize(Context("c1", client.Certificate), ns);
+
+        result.Succeeded.ShouldBeFalse();
+        result.Failure.ShouldBe(AuthFailure.ConnectionStateMissing);
+    }
+
+    [Fact]
+    public void ARequestWithoutACertificate_OnAnUnknownConnection_IsAlsoRejected()
+    {
+        var (authorizer, _, ns) = Create();
+
+        authorizer.Authorize(Context("unknown-connection", presented: null), ns).Succeeded.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void ACertificateWhoseConnectionHasNoHandshakeVerdict_IsRejected()
+    {
+        var (authorizer, registry, ns) = Create();
+        using var client = _pki.ClientCaA.IssueClient(Cn);
+        var state = registry.Open(new DefaultConnectionContext("c1"));
+        state.CompleteHandshake("TLS 1.3", "TLS_AES_256_GCM_SHA384", null, null, ClientCertificateSummary.From(client.Certificate), TimeSpan.FromMilliseconds(1));
+
+        var result = authorizer.Authorize(Context("c1", client.Certificate), ns);
+
+        result.Succeeded.ShouldBeFalse();
+        result.Failure.ShouldBe(AuthFailure.HandshakeVerdictMissing);
+    }
+
+    [Fact]
+    public void ACertificateWhoseHandshakeVerdictWasNotAccepted_IsRejected()
+    {
+        var (authorizer, registry, ns) = Create();
+        using var client = _pki.ClientCaA.IssueClient(Cn);
+        var thumbprint = ClientCertificateSummary.From(client.Certificate).ThumbprintSha256;
+        var state = registry.Open(new DefaultConnectionContext("c1"));
+        state.SetClientCertificateVerdict(new HandshakeVerdict(false, "UntrustedRoot", [], thumbprint));
+        state.CompleteHandshake("TLS 1.3", "TLS_AES_256_GCM_SHA384", null, null, ClientCertificateSummary.From(client.Certificate), TimeSpan.FromMilliseconds(1));
+
+        var result = authorizer.Authorize(Context("c1", client.Certificate), ns);
+
+        result.Succeeded.ShouldBeFalse();
+        result.Failure.ShouldBe(AuthFailure.HandshakeVerdictMissing);
+    }
+
+    [Fact]
+    public void ACertificateWhoseHandshakeVerdictBelongsToAnotherLeaf_IsRejected()
+    {
+        var (authorizer, registry, ns) = Create();
+        using var client = _pki.ClientCaA.IssueClient(Cn);
+        using var other = _pki.ClientCaA.IssueClient(Cn);
+        var state = registry.Open(new DefaultConnectionContext("c1"));
+        state.SetClientCertificateVerdict(new HandshakeVerdict(true, "NoError", [], ClientCertificateSummary.From(other.Certificate).ThumbprintSha256));
+        state.CompleteHandshake("TLS 1.3", "TLS_AES_256_GCM_SHA384", null, null, ClientCertificateSummary.From(client.Certificate), TimeSpan.FromMilliseconds(1));
+
+        var result = authorizer.Authorize(Context("c1", client.Certificate), ns);
+
+        result.Succeeded.ShouldBeFalse();
+        result.Failure.ShouldBe(AuthFailure.ClientCertificateChanged);
+    }
+
+    [Fact]
+    public void ACertificateWhoseHandshakeVerdictHasNoThumbprint_IsRejected()
+    {
+        var (authorizer, registry, ns) = Create();
+        using var client = _pki.ClientCaA.IssueClient(Cn);
+        var state = registry.Open(new DefaultConnectionContext("c1"));
+        state.SetClientCertificateVerdict(new HandshakeVerdict(true, "NoError", [], null));
+        state.CompleteHandshake("TLS 1.3", "TLS_AES_256_GCM_SHA384", null, null, ClientCertificateSummary.From(client.Certificate), TimeSpan.FromMilliseconds(1));
+
+        authorizer.Authorize(Context("c1", client.Certificate), ns).Succeeded.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void TheVerdictThumbprintComparison_IgnoresCase()
+    {
+        var (authorizer, registry, ns) = Create();
+        using var client = _pki.ClientCaA.IssueClient(Cn);
+        var thumbprint = ClientCertificateSummary.From(client.Certificate).ThumbprintSha256;
+        var state = registry.Open(new DefaultConnectionContext("c1"));
+        state.SetClientCertificateVerdict(new HandshakeVerdict(true, "NoError", [], thumbprint.ToLowerInvariant()));
+        state.CompleteHandshake("TLS 1.3", "TLS_AES_256_GCM_SHA384", null, null, ClientCertificateSummary.From(client.Certificate), TimeSpan.FromMilliseconds(1));
+
+        authorizer.Authorize(Context("c1", client.Certificate), ns).Succeeded.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task TheRealValidationCallback_RecordsTheThumbprintOfTheLeafItSaw()
+    {
+        var (_, registry, _) = Create();
+        using var client = _pki.ClientCaA.IssueClient(Cn);
+        using var validatorFolder = new TempFolder();
+        var store = NamespaceStore.Open(validatorFolder.Path, [new NamespaceDefinition
+        {
+            Name = "_default",
+            ClientTrust = new ClientTrust { SubjectCommonNames = [Cn], CaCertificatesDerBase64 = [_pki.ClientCaA.DerBase64] },
+        }]);
+        var validator = new ClientCertificateValidator(new ClientTrustProvider(store));
+        var state = registry.Open(new DefaultConnectionContext("c1"));
+
+        await Task.Run(() =>
+        {
+            ConnectionState.Current = state;
+            validator.Validate(client.Certificate, presentedChain: null, System.Net.Security.SslPolicyErrors.None).ShouldBeTrue();
+        }, TestContext.Current.CancellationToken);
+
+        state.ClientCertificateVerdict.ShouldNotBeNull().LeafThumbprintSha256.ShouldBe(ClientCertificateSummary.From(client.Certificate).ThumbprintSha256);
     }
 }

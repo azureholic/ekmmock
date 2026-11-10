@@ -16,9 +16,12 @@ Measured on the development machine (Windows 10.0.26300, Docker Desktop with the
 | Item | Result |
 |---|---|
 | `dotnet build EkmMock.sln -warnaserror` | 0 warnings, 0 errors |
-| `dotnet test --solution EkmMock.sln` (Windows, Debug, including the Playwright browser tests) | **2,206 tests: 2,202 passed, 0 failed, 4 skipped** |
-| Per project | Crypto 308, Server 1,319, Cli 280, Console 299 |
-| The 4 skips | `CipherPolicyTests.Linux_*`: `CipherSuitesPolicy` is not supported by the Windows TLS stack; they run on Linux (container run and CI) |
+| `dotnet test --solution EkmMock.sln` (Windows, Debug, including the Playwright browser tests) | **2,206 tests: 2,202 passed, 0 failed, 4 skipped** (M9 (2/2)). After the [security review follow-up](DECISIONS.md#security-review-follow-up): **2,305 tests: 2,298 passed, 0 failed, 7 skipped** |
+| Per project | Crypto 308, Server 1,319, Cli 280, Console 299 (M9). After the follow-up: Crypto 308, Server 1,418, Cli 280, Console 299 |
+| The 4 skips | `CipherPolicyTests.Linux_*`: `CipherSuitesPolicy` is not supported by the Windows TLS stack; they run on Linux (container run and CI). The follow-up added 3 skips on Windows: two Unix file-mode tests (`AuditHardeningTests`, `PkiKeyFilePermissionsTests`; they ran and passed in the Linux container) |
+| Security review follow-up (Linux container, Server project, `tests/run-server-tests-linux.ps1`) | 1,418 tests, 0 failed, 6 skipped (the 4 Windows-only CNG tests and the 2 `SshSourceRuleTests`, which need the Bicep CLI that the container does not have; the CI `azure-templates` job runs them with `EKMMOCK_REQUIRE_BICEP=true`) |
+| Security review follow-up (Server project, 3 consecutive Windows runs) | 1,418 tests, 1,411 passed, 0 failed, 7 skipped, three times |
+| Inspector overhead (spec 14 test 24) after the follow-up | p99 28.8 µs masked / 32.3 µs with reveal allowed (threshold 1 ms), see [DECISIONS](DECISIONS.md#security-review-follow-up) |
 | Added by M9 (2/2) | 18 tests: `AzureDeploymentFilesTests` (the Azure files) and `DocumentationTests` (links, anchors, this file's matrix and Azure tables); `DeploymentFilesTests` now expects five CI jobs |
 | `dotnet list package --vulnerable --include-transitive` | no vulnerable package in any of the 9 projects |
 | Before this half (M9 part 1) | 2,188 tests: 2,184 passed, 0 failed, 4 skipped; Linux container run of the Server project 1,301 tests, 0 failed, 4 skipped (the Windows-only CNG tests) |

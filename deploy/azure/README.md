@@ -8,7 +8,7 @@
 | File | What it is |
 |---|---|
 | [`vm.bicep`](vm.bicep) | **Recommended.** Ubuntu 24.04 VM with Docker: Standard static public IP + DNS label, NSG, VNet, cloud-init. |
-| [`cloud-init.yaml`](cloud-init.yaml), [`vm-setup.sh`](vm-setup.sh) | First-boot configuration (installed by `vm.bicep`); `vm-setup.sh` is also the on-VM tool (`bootstrap`, `run`, `upgrade`, `status`). |
+| [`cloud-init.yaml`](cloud-init.yaml), [`vm-setup.sh`](vm-setup.sh) | First-boot configuration (installed by `vm.bicep`); `vm-setup.sh` is also the on-VM tool (`bootstrap`, `run`, `upgrade`, `status`, `reissue`). |
 | [`aci.bicep`](aci.bicep) | **Alternative, more unverified.** Azure Container Instances with a public IP + DNS label and an Azure Files share. |
 | [`vm.example.bicepparam`](vm.example.bicepparam), [`aci.example.bicepparam`](aci.example.bicepparam) | Example parameter files with `<REPLACE-...>` placeholders. Copy to `*.local.bicepparam` (git-ignored). |
 | [`e2e.sh`](e2e.sh) | The end-to-end test against a real Managed HSM (spec section 15). |
@@ -69,7 +69,7 @@ cp deploy/azure/vm.example.bicepparam deploy/azure/vm.local.bicepparam    # edit
 az deployment group create --resource-group rg-ekmmock-test --parameters deploy/azure/vm.local.bicepparam --query properties.outputs
 ```
 
-The parameters that matter: `location` (the HSM's region), `sshPublicKey` (the **public** key line), `allowedSshSourceAddress` (your IP or CIDR; **required, no default, and `*`, `Internet`, `Any`, `0.0.0.0/0` are rejected**), `masterKey` (secure), the image source (below), `generateTestCertificate` (default `true`), `enableFaultInjection` (default `true`: needed for the spec 15 scenarios; rules can only be created from the loopback-only console). All parameters have descriptions: `bicep build deploy/azure/vm.bicep` or read the file.
+The parameters that matter: `location` (the HSM's region), `sshPublicKey` (the **public** key line), `allowedSshSourceAddress` (**required, no default**: ONE IPv4 address or an IPv4 CIDR no wider than `/16`, or one IPv6 address / range no wider than `/48`; service tags such as `Internet`, `*`, `Any`, `0.0.0.0/0`, host names and wider ranges **fail the deployment**), `masterKey` (secure), the image source (below) including **`repoRef`, which has no usable default and must be set to a release tag or a full commit SHA for `build`**, `generateTestCertificate` (default `true`), `enableFaultInjection` (default **`false`**, like ACI; set it to `true` for the spec 15 scenarios; rules can only be created from the loopback-only console). All parameters have descriptions: `bicep build deploy/azure/vm.bicep` or read the file.
 
 What you get: an NSG that allows **443 from anywhere** (Managed HSM source IPs are not static and cannot be allow-listed; mutual TLS with client-certificate validation in the app is the access control) and **22 only from your address**; everything else, including the console port 8080, is denied.
 SSH password login is disabled. The console stays on the VM's loopback.
@@ -78,7 +78,7 @@ SSH password login is disabled. The console stays on the VM's loopback.
 
 No image is published (`ghcr.io/azureholic/ekmmock` does **not** exist), so there are two ways, chosen with `imageSource`:
 
-- **`build` (default):** on first boot the VM clones `repoUrl` at `repoRef` (default `https://github.com/azureholic/ekmmock.git`, `main`) and runs `docker build -f deploy/docker/Dockerfile`. It takes a few minutes on a B2s. **Pin `repoRef` to a tag or a 40-character commit SHA** for a reproducible deployment: `main` moves.
+- **`build` (default):** on first boot the VM clones `repoUrl` (default `https://github.com/azureholic/ekmmock.git`) at `repoRef` and runs `docker build -f deploy/docker/Dockerfile`. It takes a few minutes on a B2s. **`repoRef` has no usable default** (the placeholder `<REPLACE-WITH-TAG-OR-SHA>` makes a `build` deployment fail on purpose): choose a release tag or a 40-character commit SHA, so that nobody deploys whatever the moving branch `main` points to by accident. With `pull` the value is not used.
 - **`pull`:** set `imageSource = 'pull'` and `containerImage` to an image in **your own registry** (for example built with `az acr build --registry <acr> --image ekmmock:<version> --file deploy/docker/Dockerfile .`, which needs access to nuget.org). For a private registry also set `registryUsername` and the secure `registryPassword` (a pull-only token). Use a version tag or digest, not `latest`.
 
 ### First boot
@@ -90,14 +90,16 @@ cloud-init installs Docker from Docker's own apt repository (the signing key's f
 ssh <user>@<fqdn> sudo tail -f /var/log/ekmmock-bootstrap.log        # the exact command is the output bootstrapLogCommand
 ```
 
-It ends with `EkmMock is ready`. Re-run steps later with `sudo /opt/ekmmock/bin/ekmmock-vm.sh status|run|upgrade`.
+It ends with `EkmMock is ready`. Re-run steps later with `sudo /opt/ekmmock/bin/ekmmock-vm.sh status|run|upgrade|reissue`.
+
+The container starts with **bounded inspector memory** for the 4 GiB VM: `Inspector__RingBufferSize=5000`, `Inspector__MaxBytes=67108864` (64 MiB, estimated) and `Inspector__ChannelCapacity=2048` (the app defaults are 10000 / 128 MiB / 4096). Anonymous internet traffic reaches the inspector, so it is bounded in bytes, not only in record count; change the three `INSPECTOR_*` constants at the top of `/opt/ekmmock/bin/ekmmock-vm.sh` (and run `... run`) if you need more.
 
 ### The certificate flow (the SAN must equal the FQDN)
 
 Managed HSM validates the proxy's server certificate against the **root CA** you register, and the certificate's **SAN must equal the `--host`** (the public FQDN, output `fqdn`). On first boot, with `generateTestCertificate = true`:
 
 1. the VM's `ekmmock certs ca` creates a test **root CA** (10 years) and `ekmmock certs server --fqdn <fqdn> --san localhost --san 127.0.0.1` issues the **server certificate** (397 days) with SAN = the FQDN (plus `localhost` and `127.0.0.1` so that the console, reached through the tunnel, verifies against the same root);
-2. the server certificate and key go to `/opt/ekmmock/data/tls/server.crt` and `server.key` (hot-reloaded when replaced); the **CA's private key stays in `/opt/ekmmock/data/pki/root-ca.key`** (mode 0600) so you can re-issue under the same root. **No private key ever leaves the VM**; delete `root-ca.key` if you do not want re-issue ability;
+2. the server certificate and key go to `/opt/ekmmock/data/tls/server.crt` and `server.key` (hot-reloaded when replaced); the **CA's private key is moved to `/opt/ekmmock/pki-private/root-ca.key`** (root-owned, mode 0400, **not** mounted into the container: `/opt/ekmmock/data` is mounted into, and readable by, the app, so the CA key must not live there). **No private key ever leaves the VM.** To issue a new server certificate under the SAME root (the root registered on the Managed HSM connection stays valid): `sudo /opt/ekmmock/bin/ekmmock-vm.sh reissue` (it needs `root-ca.key`; it issues into a private scratch folder, installs the new certificate, deletes the scratch folder and restarts the container). Delete `/opt/ekmmock/pki-private/root-ca.key` if you do not want that ability (then a new certificate means a new root and a new `--server-ca-certificate`). A VM created by an earlier version of this template has the key in `/opt/ekmmock/data/pki`: `ekmmock-vm.sh run`, `upgrade` or `reissue` moves it out once;
 3. the **public** root certificate is `/opt/ekmmock/data/tls/root-ca.pem`. This is what `az keyvault ekm-connection create --server-ca-certificate` takes (the **root**, not the leaf). Get it with the output `fetchRootCaCommand`:
 
    ```bash
@@ -122,7 +124,7 @@ deploy/azure/e2e.sh --dry-run all        # read what it would do
 deploy/azure/e2e.sh all                  # trust, connection, key references, wrap/unwrap round trip
 ```
 
-See [`e2e.sh`](e2e.sh) (`--help`) and [`docs/RESULTS.md`](../../docs/RESULTS.md) for the scenarios and where to record them. **The script is unverified against a real Managed HSM.**
+See [`e2e.sh`](e2e.sh) (`--help`) and [`docs/RESULTS.md`](../../docs/RESULTS.md) for the scenarios and where to record them. **The script is unverified against a real Managed HSM.** Handling of secrets: the plaintext DEK and the request bodies that carry it live in a private `mktemp -d` folder (mode 700, `umask 077`) that is shredded and removed on exit, never in `--work-dir`; a bearer token (`EKMMOCK_CONSOLE_TOKEN`) is handed to `curl` on standard input (`--config -`), never in its arguments; `--insecure-console` is accepted only for a loopback console (`127.0.0.1`, `localhost`, `::1`), otherwise pass `--console-ca`.
 
 ## Option 2 (alternative): Azure Container Instances
 
@@ -132,7 +134,7 @@ Read the header of [`aci.bicep`](aci.bicep) first. In short: ACI does TCP pass-t
 
 1. **Non-root binding of port 443 in ACI is unverified** ([OQ 6](../../docs/OPEN-QUESTIONS.md)). On Docker it works because the engine sets `net.ipv4.ip_unprivileged_port_start=0`; in ACI that cannot be set or inspected. If the container exits with `Permission denied`, use the VM, or the **last resort** parameter `runAsRoot = true` (default **false**; a loud deviation from spec 5.5; whether ACI honours `runAsUser` outside confidential containers is itself unverified), or build a derived image with `USER 0` and push it to your registry.
 2. **No read-only root file system, no capability drop, no `no-new-privileges`** in ACI: the spec 5.5 hardening is not available there.
-3. **Azure Files over SMB with the storage account key** (no managed identity for the mount): the key is read inside the template (`listKeys()`) and never output. File ownership and `chmod` semantics for uid 1654 on the SMB mount are unverified; the key store sets file modes.
+3. **Azure Files over SMB with the storage account key** (no managed identity for the mount): the key is read inside the template (`listKeys()`) and never output. File ownership and `chmod` semantics for uid 1654 on the SMB mount are unverified; the key store sets file modes. **Whoever holds the storage account key can read the `/data` share, including the console's ASP.NET Data Protection key ring, which is stored unencrypted ([OQ 63](../../docs/OPEN-QUESTIONS.md)): such a person can forge a console session cookie** (and read the key store file, whose key blobs stay encrypted under the master key). The storage account is hardened as far as the mount allows (`minimumTlsVersion: TLS1_2`, `supportsHttpsTrafficOnly: true`, `allowBlobPublicAccess: false`) but has **no network deny rule**: ACI cannot be allow-listed in a storage firewall without a VNet, and a deny rule would break the mount. Treat the key like the console's admin password: limit who has *Contributor* / *Storage Account Key Operator* on the account, **rotate the key** (`az storage account keys renew`, then redeploy) when someone leaves, and prefer the VM model, or a later VNet-integrated variant with a storage service endpoint, when this matters.
 4. **No NSG for a container group's public IP**: nothing restricts connections at the ACI level; mTLS (EKM) and Entra ID (console) are the only controls. The console is therefore exposed to the internet behind Entra sign-in.
 5. The server certificate comes from a **read-only secret volume** (the console's certificate upload cannot persist it); renew by redeploying with new certificate parameters. The DNS label uses the legacy scope so that the FQDN is known in advance (needed for the certificate SAN); a deleted label could be taken over by someone else.
 
@@ -152,7 +154,7 @@ az group create --name rg-ekmmock-aci --location <region-of-the-hsm>
 az deployment group create --resource-group rg-ekmmock-aci --parameters deploy/azure/aci.local.bicepparam --query properties.outputs
 ```
 
-The private key of the server certificate **does leave your machine** here (it is a secure parameter delivered to ACI as a secret volume); the CA key stays with you. Then `e2e.sh` with `--console https://<fqdn>:8443` and `EKMMOCK_CONSOLE_ARGS="--auth entra --tenant <id> --client-id <id>"` (or a token in `EKMMOCK_CONSOLE_TOKEN`).
+The container starts with bounded inspector memory for the small group (`Inspector__RingBufferSize=2000`, `Inspector__MaxBytes=33554432` = 32 MiB, `Inspector__ChannelCapacity=1024`). The private key of the server certificate **does leave your machine** here (it is a secure parameter delivered to ACI as a secret volume); the CA key stays with you. Then `e2e.sh` with `--console https://<fqdn>:8443` and `EKMMOCK_CONSOLE_ARGS="--auth entra --tenant <id> --client-id <id>"` (or a token in `EKMMOCK_CONSOLE_TOKEN`).
 
 ## Validation done offline
 
@@ -161,6 +163,7 @@ bicep build deploy/azure/vm.bicep --stdout > /dev/null && bicep lint deploy/azur
 bicep build deploy/azure/aci.bicep --stdout > /dev/null && bicep lint deploy/azure/aci.bicep
 bicep format deploy/azure/vm.bicep --outfile /tmp/f.bicep && diff deploy/azure/vm.bicep /tmp/f.bicep      # no diff
 bash -n deploy/azure/e2e.sh deploy/azure/vm-setup.sh
+# the SSH-source rule and the repoRef guard are evaluated by the real template: bicep snapshot of a throw-away .bicepparam (tests/EkmMock.Server.Tests/SshSourceRuleTests.cs does this for ~40 inputs)
 docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable -x -S style deploy/azure/e2e.sh deploy/azure/vm-setup.sh
 deploy/azure/e2e.sh --dry-run --hsm contoso-hsm --fqdn ekm.example.test all
 ```

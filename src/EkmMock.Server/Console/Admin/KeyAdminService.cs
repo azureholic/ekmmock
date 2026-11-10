@@ -187,16 +187,18 @@ internal sealed class KeyAdminService
     public KeyView SetEnabled(string actor, string ns, string name, bool enabled)
     {
         var key = new KeyRef(ns, name);
-        try
+        Find(ns, name); // not found is refused here, before anything is audited
+        _audit.Intend(actor, enabled ? AuditActions.KeyEnable : AuditActions.KeyDisable, Target(ns, name), null, () =>
         {
-            _keys.SetEnabled(key, enabled);
-        }
-        catch (EkmEngineException exception)
-        {
-            throw ConsoleActionException.From(exception);
-        }
-
-        _audit.Record(actor, enabled ? AuditActions.KeyEnable : AuditActions.KeyDisable, Target(ns, name));
+            try
+            {
+                _keys.SetEnabled(key, enabled);
+            }
+            catch (EkmEngineException exception)
+            {
+                throw ConsoleActionException.From(exception);
+            }
+        });
         return KeyView.From(Find(ns, name));
     }
 
@@ -204,20 +206,23 @@ internal sealed class KeyAdminService
     public KeyView SetExpiry(string actor, string ns, string name, DateTimeOffset? notAfter)
     {
         var key = new KeyRef(ns, name);
-        try
-        {
-            _keys.SetExpiry(key, notAfter);
-        }
-        catch (EkmEngineException exception)
-        {
-            throw ConsoleActionException.From(exception);
-        }
-
-        _audit.Record(
+        Find(ns, name); // not found is refused here, before anything is audited
+        _audit.Intend(
             actor,
             notAfter is null ? AuditActions.KeyExpiryClear : AuditActions.KeyExpirySet,
             Target(ns, name),
-            notAfter is null ? null : "not_after=" + notAfter.Value.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", System.Globalization.CultureInfo.InvariantCulture));
+            notAfter is null ? null : "not_after=" + notAfter.Value.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", System.Globalization.CultureInfo.InvariantCulture),
+            () =>
+            {
+                try
+                {
+                    _keys.SetExpiry(key, notAfter);
+                }
+                catch (EkmEngineException exception)
+                {
+                    throw ConsoleActionException.From(exception);
+                }
+            });
         return KeyView.From(Find(ns, name));
     }
 
@@ -235,16 +240,18 @@ internal sealed class KeyAdminService
             throw new ConsoleActionException(ConsoleErrorCode.ConfirmationMismatch, "Type the exact key name to confirm that it is destroyed. Nothing was changed.");
         }
 
-        try
+        // The irreversible action is audited FIRST (security review L3): if the audit log cannot be written the key is not destroyed, and if the destroy then fails an action.failed entry says so.
+        _audit.Intend(actor, AuditActions.KeyDestroy, Target(ns, name), "irreversible crypto-shred", () =>
         {
-            _keys.Destroy(new KeyRef(ns, name), actor);
-        }
-        catch (EkmEngineException exception)
-        {
-            throw ConsoleActionException.From(exception);
-        }
-
-        _audit.Record(actor, AuditActions.KeyDestroy, Target(ns, name), "irreversible crypto-shred");
+            try
+            {
+                _keys.Destroy(new KeyRef(ns, name), actor);
+            }
+            catch (EkmEngineException exception)
+            {
+                throw ConsoleActionException.From(exception);
+            }
+        });
         return KeyView.From(Find(ns, name));
     }
 

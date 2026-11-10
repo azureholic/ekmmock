@@ -19,6 +19,16 @@ internal enum AuthFailure
 
     /// <summary>The certificate seen on the request is not the one the connection's handshake recorded (defence in depth; should never happen).</summary>
     ClientCertificateChanged,
+
+    /// <summary>
+    /// The request arrived over TLS but the connection registry has no completed-handshake record for its connection (fail closed: the identity
+    /// cross-check cannot be made, so the request is not trusted).
+    /// </summary>
+    ConnectionStateMissing,
+
+    /// <summary>The connection has no <em>accepted</em> handshake-time validation verdict for the certificate the request carries (fail closed).</summary>
+    HandshakeVerdictMissing,
+
     /// <summary>The chain does not build to a root CA of <em>this namespace</em>, or a chain element is invalid.</summary>
     ChainNotTrusted,
 
@@ -105,6 +115,15 @@ internal sealed class MtlsCallerAuthorizer : IEkmCallerAuthorizer
             return Failed(AuthFailure.NoTransportSecurity);
         }
 
+        // Fail closed (security review M1): the identity cross-check below needs the connection's own record. Over TLS there is always one
+        // (the capture middleware registers it before the handshake and the inner middleware completes it before the first request); a
+        // missing or unfinished record means something is wrong, and "cannot check" must never be treated as "checked".
+        var connection = _connections.TryGet(context.Connection.Id);
+        if (connection is not { HandshakeCompleted: true })
+        {
+            return Failed(AuthFailure.ConnectionStateMissing);
+        }
+
         var certificate = context.Connection.ClientCertificate;
         if (certificate is null)
         {
@@ -113,9 +132,21 @@ internal sealed class MtlsCallerAuthorizer : IEkmCallerAuthorizer
 
         var summary = ClientCertificateSummary.From(certificate);
 
-        // Defence in depth: the certificate the request sees must be the one this connection's handshake recorded (or none at both).
-        if (_connections.TryGet(context.Connection.Id) is { HandshakeCompleted: true } connection
-            && !string.Equals(connection.ClientCertificate?.ThumbprintSha256, summary.ThumbprintSha256, StringComparison.OrdinalIgnoreCase))
+        // Defence in depth 1: the certificate the request sees must be the one this connection's post-handshake record holds (or none at both).
+        if (!string.Equals(connection.ClientCertificate?.ThumbprintSha256, summary.ThumbprintSha256, StringComparison.OrdinalIgnoreCase))
+        {
+            return Failed(AuthFailure.ClientCertificateChanged, summary);
+        }
+
+        // Defence in depth 2: it must also be the certificate the handshake-time validation callback accepted. That verdict is written by a
+        // different code path (the validation callback, from the certificate the TLS stack handed it), so a certificate attached to the request
+        // by any other route cannot satisfy it.
+        if (connection.ClientCertificateVerdict is not { Accepted: true } verdict)
+        {
+            return Failed(AuthFailure.HandshakeVerdictMissing, summary);
+        }
+
+        if (!string.Equals(verdict.LeafThumbprintSha256, summary.ThumbprintSha256, StringComparison.OrdinalIgnoreCase))
         {
             return Failed(AuthFailure.ClientCertificateChanged, summary);
         }

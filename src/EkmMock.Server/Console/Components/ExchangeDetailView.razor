@@ -170,6 +170,7 @@ else
         var body = isRequest ? record.Request.Body : record.Response.Body;
         var revealField = isRequest ? RevealFields.RequestValue : RevealFields.ResponseValue;
         var headers = isRequest ? record.Request.Headers : record.Response.Headers;
+        var headersTruncated = isRequest ? record.Request.HeadersTruncated : record.Response.HeadersTruncated;
         return @<div class="detail-section" data-role="@(isRequest ? "tab-request" : "tab-response")">
             @if (isRequest)
             {
@@ -196,9 +197,13 @@ else
                         }
                     </tbody>
                 </table>
+                @if (headersTruncated)
+                {
+                    <p class="detail-note" data-role="headers-truncated">Headers truncated: some were left out or cut to bound memory.</p>
+                }
             }
 
-            <h3>Body <span class="detail-note">(@ConsoleDisplay.Bytes(body.SizeBytes)@(body.Truncated ? ", truncated to the first 16 KiB" : null))</span></h3>
+            <h3>Body <span class="detail-note">(@ConsoleDisplay.Bytes(body.SizeBytes)@(body.Truncated ? ", truncated (only the beginning is shown)" : null))</span></h3>
             @if (!body.Captured)
             {
                 <p class="detail-note" data-role="body-not-captured">@(body.Note ?? "Not captured.")</p>

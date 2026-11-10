@@ -3,8 +3,8 @@ using System.Security.Cryptography.X509Certificates;
 
 namespace EkmMock.Server.Tls;
 
-/// <summary>What the handshake-time validation decided about a presented client certificate, for the connection event.</summary>
-internal sealed record HandshakeVerdict(bool Accepted, string ChainStatus, IReadOnlyList<byte[]> PresentedIntermediates);
+/// <summary>\n/// What the handshake-time validation decided about a presented client certificate, for the connection event. <see cref="LeafThumbprintSha256"/> is the SHA-256\n/// thumbprint (hex) of the leaf the validation callback actually saw; the authorizer binds each request to it (security review M1).\n/// </summary>
+internal sealed record HandshakeVerdict(bool Accepted, string ChainStatus, IReadOnlyList<byte[]> PresentedIntermediates, string? LeafThumbprintSha256 = null);
 
 /// <summary>
 /// Client certificate validation during the TLS handshake (spec 5.1). The operating system's trust is ignored completely:
@@ -33,6 +33,7 @@ internal sealed class ClientCertificateValidator
     public bool Validate(X509Certificate2 certificate, X509Chain? presentedChain, SslPolicyErrors sslPolicyErrors)
     {
         HandshakeVerdict verdict;
+        var leafThumbprint = SafeThumbprint(certificate);
         try
         {
             var trust = _trust.Current;
@@ -51,16 +52,28 @@ internal sealed class ClientCertificateValidator
             }
 
             var accepted = chain.Build(certificate);
-            verdict = new HandshakeVerdict(accepted, DescribeStatus(chain), presented);
+            verdict = new HandshakeVerdict(accepted, DescribeStatus(chain), presented, leafThumbprint);
         }
         catch (Exception ex) when (ex is System.Security.Cryptography.CryptographicException or ArgumentException or InvalidOperationException)
         {
-            verdict = new HandshakeVerdict(false, "ChainBuildError", []);
+            verdict = new HandshakeVerdict(false, "ChainBuildError", [], leafThumbprint);
         }
 
         Connections.ConnectionState.Current?.SetClientCertificateVerdict(verdict);
         return verdict.Accepted;
     }
+    private static string? SafeThumbprint(X509Certificate2 certificate)
+    {
+        try
+        {
+            return certificate.GetCertHashString(System.Security.Cryptography.HashAlgorithmName.SHA256);
+        }
+        catch (System.Security.Cryptography.CryptographicException)
+        {
+            return null;
+        }
+    }
+
     internal static string DescribeStatus(X509Chain chain)
     {
         if (chain.ChainStatus.Length == 0)

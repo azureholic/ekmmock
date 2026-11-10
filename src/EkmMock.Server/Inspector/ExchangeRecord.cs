@@ -126,6 +126,10 @@ internal sealed record RequestFacts
 
     public IReadOnlyList<HeaderEntry> Headers { get; init; } = [];
 
+    /// <summary>True when headers were left out or cut (the header count/length limits, or the smaller budget of an exchange whose authentication did not succeed).</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool HeadersTruncated { get; init; }
+
     public required CapturedBody Body { get; init; }
 }
 
@@ -139,6 +143,10 @@ internal sealed record ResponseFacts
     public string? Code { get; init; }
 
     public IReadOnlyList<HeaderEntry> Headers { get; init; } = [];
+
+    /// <summary>True when headers were left out or cut; see <see cref="RequestFacts.HeadersTruncated"/>.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool HeadersTruncated { get; init; }
 
     public required CapturedBody Body { get; init; }
 
@@ -193,10 +201,33 @@ internal sealed class CapturedBody
 
     public static CapturedBody Empty { get; } = new() { SizeBytes = 0 };
 
+    /// <summary>
+    /// A copy whose <see cref="Text"/> is cut to <paramref name="maxChars"/> characters and marked <see cref="Truncated"/>; the same object when it already fits. Works on the
+    /// <em>already redacted</em> text, so it can only remove content, never expose any.
+    /// </summary>
+    public CapturedBody WithTextLimit(int maxChars)
+    {
+        if (Text is not { } text || text.Length <= maxChars)
+        {
+            return this;
+        }
+
+        var length = maxChars > 0 && char.IsHighSurrogate(text[maxChars - 1]) ? maxChars - 1 : maxChars;
+        return new CapturedBody
+        {
+            SizeBytes = SizeBytes,
+            Truncated = true,
+            Captured = Captured,
+            Text = text[..length],
+            Note = Note,
+            MaskedFields = MaskedFields,
+        };
+    }
+
     /// <summary>The size of the body on the wire (the declared or observed length, which can exceed the captured 16 KiB).</summary>
     public required long SizeBytes { get; init; }
 
-    /// <summary>More than 16 KiB: <see cref="Text"/> covers only the first 16 KiB.</summary>
+    /// <summary>More than 16 KiB (1 KiB for an exchange whose authentication did not succeed): <see cref="Text"/> covers only the beginning of the body.</summary>
     public bool Truncated { get; init; }
 
     /// <summary>False when the body was deliberately not stored (an unparseable body on a position that can carry a DEK).</summary>

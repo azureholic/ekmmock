@@ -1,3 +1,4 @@
+using EkmMock.Pki;
 using System.Security.Cryptography;
 using EkmMock.Cli.Bench;
 using EkmMock.Cli.Commands;

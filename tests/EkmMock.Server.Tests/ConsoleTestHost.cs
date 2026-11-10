@@ -37,9 +37,14 @@ internal sealed class TestAuthHandler : AuthenticationHandler<AuthenticationSche
         }
 
         var claims = new List<Claim> { new("oid", oid.ToString()), new("name", Request.Headers["X-Test-Name"].ToString() is { Length: > 0 } name ? name : "Test User") };
+        // A real Entra token always carries the tenant claim: the stand-in does too (the test host's tenant) unless a test asks for none or another one.
         if (Request.Headers.TryGetValue("X-Test-Tid", out var tid))
         {
             claims.Add(new Claim("tid", tid.ToString()));
+        }
+        else if (!Request.Headers.ContainsKey("X-Test-No-Tid"))
+        {
+            claims.Add(new Claim("tid", ConsoleTestHost.TenantId));
         }
 
         if (Request.Headers.TryGetValue("X-Test-Groups", out var groups))

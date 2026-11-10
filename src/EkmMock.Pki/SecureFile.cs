@@ -3,14 +3,14 @@ using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
 
-namespace EkmMock.Cli.Infrastructure;
+namespace EkmMock.Pki;
 
 /// <summary>
 /// Writes files that contain secrets (master key, test-PKI private keys) so that only the current user can read them, and never overwrites anything unless asked. The file is created
 /// with restrictive permissions <em>before</em> the content is written (Unix mode 0600 at creation; on Windows the ACL is replaced with the current user right after creation and before any
 /// content is written), so there is no moment where the secret is readable by others.
 /// </summary>
-internal static class SecureFile
+public static class SecureFile
 {
     /// <summary>Writes <paramref name="content"/> to a new file readable by the owner only. Throws <see cref="IOException"/> when the file exists and <paramref name="overwrite"/> is false.</summary>
     public static void WriteSecret(string path, string content, bool overwrite = false)

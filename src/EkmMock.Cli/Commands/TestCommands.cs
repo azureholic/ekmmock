@@ -1,3 +1,4 @@
+using EkmMock.Pki;
 using System.CommandLine;
 using System.Text.Json;
 using EkmMock.Cli.Bench;

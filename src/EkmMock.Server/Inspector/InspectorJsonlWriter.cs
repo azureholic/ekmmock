@@ -158,7 +158,7 @@ internal sealed class InspectorJsonlWriter : IInspectorStage, IDisposable
             var existing = File.Exists(path) ? new FileInfo(path).Length : 0;
             if (existing == 0 || existing + lineBytes <= _options.MaxFileBytes)
             {
-                _stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete, 64 * 1024);
+                _stream = new FileStream(path, OwnerOnlyFile.Options(FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete, 64 * 1024));
                 _size = existing;
                 _index = index;
                 break;

@@ -31,6 +31,14 @@ internal sealed class ConnectionCapture
     private readonly TimeProvider _time;
     private readonly ILogger _logger;
     private readonly TimeSpan _handshakeTimeout;
+    private readonly int _maxConnections;
+    private readonly WarningThrottle _handshakeWarnings;
+    private readonly WarningThrottle _limitWarnings;
+    private int _active;
+    private long _rejected;
+
+    /// <summary>The default of <c>Limits:MaxConnections</c>: open connections on the EKM listener (handshaking or established) beyond this are closed at once.</summary>
+    public const int DefaultMaxConnections = 1000;
 
     public ConnectionCapture(
         ConnectionRegistry registry,
@@ -39,8 +47,10 @@ internal sealed class ConnectionCapture
         EkmListenerPorts ports,
         TimeProvider time,
         ILoggerFactory loggerFactory,
-        TimeSpan handshakeTimeout)
+        TimeSpan handshakeTimeout,
+        int maxConnections = DefaultMaxConnections)
     {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxConnections, 1);
         _registry = registry;
         _sink = sink;
         _metrics = metrics;
@@ -48,10 +58,51 @@ internal sealed class ConnectionCapture
         _time = time;
         _logger = loggerFactory.CreateLogger("EkmMock.Connections");
         _handshakeTimeout = handshakeTimeout;
+        _maxConnections = maxConnections;
+        _handshakeWarnings = new WarningThrottle(time);
+        _limitWarnings = new WarningThrottle(time);
     }
+
+    /// <summary>Connections closed immediately because <c>Limits:MaxConnections</c> open connections already existed on the EKM listener.</summary>
+    public long RejectedConnections => Interlocked.Read(ref _rejected);
+
+    /// <summary>Connections on the EKM listener right now (handshaking or established), as counted for the limit.</summary>
+    public int ActiveConnections => Volatile.Read(ref _active);
 
     /// <summary>Before <c>UseHttps</c>.</summary>
     public ConnectionDelegate Outer(ConnectionDelegate next) => async context =>
+    {
+        // The connection limit of the EKM listener (security review L1). Kestrel's own MaxConcurrentConnections is server wide, so a flood of anonymous connections to this public port
+        // would also lock out the console; counting here limits only this listener. A connection over the limit is closed before anything is allocated for it or logged per connection.
+        var active = Interlocked.Increment(ref _active);
+        try
+        {
+            if (active > _maxConnections)
+            {
+                RejectOverLimit(context);
+                return;
+            }
+
+            await CaptureAsync(context, next).ConfigureAwait(false);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _active);
+        }
+    };
+
+    private void RejectOverLimit(ConnectionContext context)
+    {
+        var total = Interlocked.Increment(ref _rejected);
+        if (_limitWarnings.TryAcquire())
+        {
+            _logger.LogWarning("EKM connection limit reached ({Limit} open connections): closing a connection from {Remote}. {Total} connection(s) refused so far; set Limits:MaxConnections to change the limit.", _maxConnections, context.RemoteEndPoint?.ToString(), total);
+        }
+
+        context.Abort();
+    }
+
+    private async Task CaptureAsync(ConnectionContext context, ConnectionDelegate next)
     {
         var state = _registry.Open(context);
         _ports.Add(state.LocalPort);
@@ -76,7 +127,7 @@ internal sealed class ConnectionCapture
             context.Transport = original;
             Close(state);
         }
-    };
+    }
 
     /// <summary>After <c>UseHttps</c>: the TLS handshake has succeeded when this runs.</summary>
     public ConnectionDelegate Inner(ConnectionDelegate next) => context =>
@@ -167,11 +218,24 @@ internal sealed class ConnectionCapture
                     FailureReason = reason,
                     FailureDetail = detail,
                 });
-                _logger.LogWarning(
-                    "TLS handshake failed: reason={Reason} remote={Remote} detail={Detail}",
-                    HandshakeFailureReasons.Label(reason),
-                    state.RemoteEndPoint,
-                    detail);
+                // Anyone can cause this line at will (a port scan, a flood of plain-HTTP or TLS 1.2 clients), so it is rate limited: the connection event above and the metric
+                // counter still record every failure; only the log line is aggregated into a periodic summary (security review L1).
+                if (_handshakeWarnings.TryAcquire())
+                {
+                    _logger.LogWarning(
+                        "TLS handshake failed: reason={Reason} remote={Remote} detail={Detail}",
+                        HandshakeFailureReasons.Label(reason),
+                        state.RemoteEndPoint,
+                        detail);
+                }
+
+                if (_handshakeWarnings.TakeSummary() is > 0 and var suppressed)
+                {
+                    _logger.LogWarning(
+                        "{Suppressed} further TLS handshake failure(s) were not logged one by one in the last {Seconds:0} s (every failure is a connection event and counted in ekmmock_tls_handshake_failures_total)",
+                        suppressed,
+                        _handshakeWarnings.SummaryInterval.TotalSeconds);
+                }
             }
 
             Publish(new ConnectionEvent

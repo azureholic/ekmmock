@@ -190,6 +190,17 @@ internal sealed class ExchangeRecordFactory
     private const int MaxHeaderValueLength = 1024;
     private const int MaxTargetLength = 2048;
 
+    /// <summary>Stored header budget (name and value characters together) of an exchange whose caller was authenticated.</summary>
+    internal const int AuthenticatedHeaderBudgetChars = 16 * 1024;
+
+    /// <summary>
+    /// Anything captured before or without a successful authentication (401, unknown route, 405, ...) comes from an unauthenticated peer, who must not be able to
+    /// make the inspector retain much: headers are stored up to 4 KiB in total, each body up to 1 KiB (security review M2).
+    /// </summary>
+    internal const int UnauthenticatedHeaderBudgetChars = 4 * 1024;
+
+    internal const int UnauthenticatedBodyChars = 1024;
+
     private static readonly HashSet<string> SensitiveHeaders = new(StringComparer.OrdinalIgnoreCase)
     {
         "Authorization", "Proxy-Authorization", "Cookie", "Set-Cookie", "X-Api-Key", "Api-Key", "X-Auth-Token",
@@ -214,12 +225,24 @@ internal sealed class ExchangeRecordFactory
         // The response body: masked on an unwrap response (the plaintext DEK), shown as it is otherwise.
         var responsePosition = BodyPositions.For(exchange.Operation, isRequest: false);
         var responseBuffer = session.ResponseBuffer;
+        var authenticated = exchange.Authentication is { Succeeded: true };
         var responseBody = BodyRedactor.Redact(responseBuffer.Span, responseBuffer.Total, responseBuffer.Truncated, responsePosition, _revealAllowed);
-        byte[]? retainedResponse = _revealAllowed && responsePosition == BodyPosition.SecretResponse && !responseBuffer.Truncated && responseBuffer.Total > 0
+        byte[]? retainedResponse = authenticated && _revealAllowed && responsePosition == BodyPosition.SecretResponse && !responseBuffer.Truncated && responseBuffer.Total > 0
             ? responseBuffer.Span.ToArray()
             : null;
 
         var requestBody = session.RequestBody ?? CapturedBody.Empty;
+        var headerBudget = authenticated ? AuthenticatedHeaderBudgetChars : UnauthenticatedHeaderBudgetChars;
+        if (!authenticated)
+        {
+            // Bound what an unauthenticated peer can make us keep. The text is already masked, so cutting it cannot expose anything; nothing raw is retained for it either.
+            requestBody = requestBody.WithTextLimit(UnauthenticatedBodyChars);
+            responseBody = responseBody.WithTextLimit(UnauthenticatedBodyChars);
+            session.DiscardRetained();
+        }
+
+        var requestHeaders = HeadersOf(request.Headers, headerBudget, out var requestHeadersTruncated);
+        var responseHeaders = HeadersOf(response.Headers, headerBudget, out var responseHeadersTruncated);
         var (bodyRequestId, bodyCorrelationId, bodyPoolName) = session.BodyContext;
         var status = exchange.StatusCode;
 
@@ -245,7 +268,8 @@ internal sealed class ExchangeRecordFactory
                 Key = Bound(exchange.KeyName, EkmNames.MaxKeyNameLength + 16),
                 Operation = exchange.Operation?.WireName(),
                 ApiVersion = Bound(request.Query.TryGetValue(EkmApi.ApiVersionQueryParameter, out var versions) ? versions.ToString() : null, 64),
-                Headers = HeadersOf(request.Headers),
+                Headers = requestHeaders,
+                HeadersTruncated = requestHeadersTruncated,
                 Body = requestBody,
             },
             Context = new EkmContextFacts(
@@ -257,7 +281,8 @@ internal sealed class ExchangeRecordFactory
             {
                 Status = status,
                 Code = exchange.ErrorCode,
-                Headers = HeadersOf(response.Headers),
+                Headers = responseHeaders,
+                HeadersTruncated = responseHeadersTruncated,
                 Body = responseBody,
                 ClientAborted = exchange.ClientAborted,
                 ClosedByServer = exchange.ClosedByFault,
@@ -356,23 +381,38 @@ internal sealed class ExchangeRecordFactory
         return context.Connection.RemoteIpAddress is { } address ? new IPEndPoint(address, context.Connection.RemotePort).ToString() : null;
     }
 
-    private static IReadOnlyList<HeaderEntry> HeadersOf(IHeaderDictionary headers)
+    private static IReadOnlyList<HeaderEntry> HeadersOf(IHeaderDictionary headers, int budgetChars, out bool truncated)
     {
+        truncated = false;
         if (headers.Count == 0)
         {
             return [];
         }
 
         var list = new List<HeaderEntry>(Math.Min(headers.Count, MaxHeaders));
+        var remaining = budgetChars;
         foreach (var header in headers)
         {
-            if (list.Count >= MaxHeaders)
+            if (list.Count >= MaxHeaders || remaining <= header.Key.Length)
             {
+                truncated = true;
                 break;
             }
 
-            var value = SensitiveHeaders.Contains(header.Key) ? "[redacted]" : Bound(header.Value.ToString(), MaxHeaderValueLength) ?? string.Empty;
-            list.Add(new HeaderEntry(header.Key, value));
+            // The name counts against the budget too (it is client controlled text as well).
+            var name = header.Key;
+            var raw = SensitiveHeaders.Contains(name) ? "[redacted]" : header.Value.ToString();
+            var value = Bound(raw, MaxHeaderValueLength) ?? string.Empty;
+            truncated |= value.Length < raw.Length;
+            remaining -= name.Length;
+            if (value.Length > remaining)
+            {
+                value = value[..remaining];
+                truncated = true;
+            }
+
+            remaining -= value.Length;
+            list.Add(new HeaderEntry(name, value));
         }
 
         return list;

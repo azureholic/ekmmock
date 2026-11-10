@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Security;
 using System.Security.Cryptography.X509Certificates;
 using EkmMock.Server.Connections;
+using EkmMock.Server.Inspector;
 using EkmMock.Server.Metrics;
 using EkmMock.Server.Tls;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
@@ -95,7 +96,8 @@ internal sealed class EkmKestrelSetup : IConfigureOptions<KestrelServerOptions>
         EkmListenerPorts ports,
         ListenerRegistry listeners,
         TimeProvider time,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        IOptions<LimitsOptions> limits)
     {
         _endpoint = endpoint.Value;
         _tls = tls.Value;
@@ -103,7 +105,7 @@ internal sealed class EkmKestrelSetup : IConfigureOptions<KestrelServerOptions>
         _validator = validator;
         _policy = policy;
         _listeners = listeners;
-        _capture = new ConnectionCapture(registry, sink, metrics, ports, time, loggerFactory, _tls.HandshakeTimeout);
+        _capture = new ConnectionCapture(registry, sink, metrics, ports, time, loggerFactory, _tls.HandshakeTimeout, limits.Value.MaxConnections);
         _logger = loggerFactory.CreateLogger("EkmMock.Tls");
     }
 

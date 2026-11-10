@@ -467,6 +467,18 @@ internal sealed class RetainedSecrets
         }
     }
 
+    /// <summary>The bytes of raw bodies held right now (for the ring buffer's memory estimate).</summary>
+    public long ApproximateBytes
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return (_request?.Length ?? 0) + (_response?.Length ?? 0);
+            }
+        }
+    }
+
     /// <summary>A copy of the raw request body (the caller zeroes it), or null when it was not retained or has been evicted.</summary>
     public byte[]? CopyRequestBody()
     {

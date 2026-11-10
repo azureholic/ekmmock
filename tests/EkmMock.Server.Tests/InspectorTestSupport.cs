@@ -19,6 +19,9 @@ internal sealed class ListAuditLog : IAuditLog
 
     public bool Fail { get; set; }
 
+    /// <summary>Called with every entry just before it is stored (after the failure check); lets a test observe the world at the moment of the audit write.</summary>
+    public Action<AuditEntry>? OnAppend { get; set; }
+
     public IReadOnlyList<AuditEntry> Entries
     {
         get
@@ -37,9 +40,11 @@ internal sealed class ListAuditLog : IAuditLog
             throw new IOException("audit unavailable (test)");
         }
 
+        var entry = new AuditEntry(DateTimeOffset.UtcNow, user, action, target, detail);
+        OnAppend?.Invoke(entry);
         lock (_entries)
         {
-            _entries.Add(new AuditEntry(DateTimeOffset.UtcNow, user, action, target, detail));
+            _entries.Add(entry);
         }
     }
 

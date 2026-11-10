@@ -23,8 +23,20 @@ internal sealed class InspectorOptions
     /// <summary>Exchanges kept in memory (spec 8.3: default 10 000).</summary>
     public int RingBufferSize { get; set; } = 10_000;
 
+    /// <summary>
+    /// Upper bound of the memory the ring buffer retains, in bytes (security review M2): the oldest records are evicted until the estimated total is under it, even
+    /// when <see cref="RingBufferSize"/> is not reached. The estimate counts what a record stores (strings at two bytes per character, retained raw bodies, a fixed
+    /// overhead per record); it is not a process memory limit. Default 128 MiB.
+    /// </summary>
+    public long MaxBytes { get; set; } = DefaultMaxBytes;
+
+    /// <summary>The smallest accepted <see cref="MaxBytes"/> (a record can be large; below this the buffer would hold almost nothing).</summary>
+    public const long MinMaxBytes = 64 * 1024;
+
+    public const long DefaultMaxBytes = 128L * 1024 * 1024;
+
     /// <summary>Capacity of the bounded queue between the request path and the consumer. When it is full the oldest record is dropped and counted.</summary>
-    public int ChannelCapacity { get; set; } = 8192;
+    public int ChannelCapacity { get; set; } = 4096;
 
     /// <summary>Capacity of every live-feed subscription (one per open console). A slow console loses its own oldest items, nobody else's.</summary>
     public int SubscriberCapacity { get; set; } = 1000;
@@ -54,6 +66,10 @@ internal sealed class InspectorOptions
         if (RingBufferSize < 1)
         {
             error = "Inspector:RingBufferSize must be at least 1";
+        }
+        else if (MaxBytes < MinMaxBytes)
+        {
+            error = $"Inspector:MaxBytes must be at least {MinMaxBytes}";
         }
         else if (ChannelCapacity < 1)
         {
@@ -107,6 +123,11 @@ internal sealed class InspectorOptionsValidator : IValidateOptions<InspectorOpti
             return ValidateOptionsResult.Fail("Limits:InternalDeadlineMs must be at least 1");
         }
 
+        if (options.MaxConnections < 1)
+        {
+            return ValidateOptionsResult.Fail("Limits:MaxConnections must be at least 1");
+        }
+
         return options.MaxConcurrency < 1
             ? ValidateOptionsResult.Fail("Limits:MaxConcurrency must be at least 1")
             : ValidateOptionsResult.Success;
@@ -132,6 +153,12 @@ internal sealed class LimitsOptions
 
     /// <summary>Requests in flight at the same time (spec 10.1); one more is answered <c>429</c> immediately. There is no queue. Default 64.</summary>
     public int MaxConcurrency { get; set; } = 64;
+
+    /// <summary>
+    /// Open connections (handshaking or established) the EKM listener accepts at the same time; the next one is closed at once (security review L1). Default 1000. Counted per listener, so a flood
+    /// on the public EKM port cannot lock out the console (Kestrel's own <c>MaxConcurrentConnections</c> is server wide).
+    /// </summary>
+    public int MaxConnections { get; set; } = EkmMock.Server.Connections.ConnectionCapture.DefaultMaxConnections;
 
     public bool IsValid() => LatencyWarningMs >= 0 && LatencyBudgetMs >= LatencyWarningMs;
 }

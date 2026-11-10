@@ -196,12 +196,10 @@ public sealed partial class AzureDeploymentFilesTests
         code.ShouldContain("sourceAddressPrefix: sshSourceChecked");
         code.ShouldContain("access: 'Deny'");
 
-        // The SSH source has no default, and the open values are rejected by a guard.
+        // The SSH source has no default, and only a positively validated narrow address passes the guard (the cases are evaluated by the real template in SshSourceRuleTests).
         Regex.IsMatch(code, @"(?m)^param allowedSshSourceAddress string$").ShouldBeTrue("allowedSshSourceAddress must have no default value");
-        foreach (var open in new[] { "'*'", "'0.0.0.0/0'", "'internet'", "'any'" })
-        {
-            code.ShouldContain(open);
-        }
+        code.ShouldContain("var sshSourceChecked = substring(sshSourceTrimmed, 0, sshSourceIsAcceptable ? length(sshSourceTrimmed) : 100000)");
+        code.ShouldNotContain("sshSourceIsOpen", customMessage: "the denylist was replaced by a positive validation");
 
         code.ShouldContain("disablePasswordAuthentication: true");
     }
@@ -334,8 +332,110 @@ public sealed partial class AzureDeploymentFilesTests
             line.ShouldNotContain("dek.bin");
         }
 
-        code.ShouldContain("rm -f \"$WORK_DIR\"/dek.bin");
+        code.ShouldContain("rm -rf \"$SECRET_DIR\"");
+        code.ShouldNotContain("$WORK_DIR/dek.bin");
+        code.ShouldNotContain("$WORK_DIR/unwrapped.bin");
+        code.ShouldNotMatch(@"\$WORK_DIR/(un)?wrap-");
         code.ShouldNotContain("set -x");
         code.ShouldNotContain("eval ");
+    }
+
+    // ---- security review follow-up: L5, L6, L8, L9, M2(d) ----
+
+    [Fact]
+    public void TheVmTemplate_HasNoUsableRepoRefDefault_AndFaultInjectionIsOffByDefault()
+    {
+        var code = RepositoryFiles.WithoutComments("deploy/azure/vm.bicep");
+
+        code.ShouldContain("param repoRef string = '<REPLACE-WITH-TAG-OR-SHA>'");
+        code.ShouldNotContain("param repoRef string = 'main'");
+        code.ShouldContain("param enableFaultInjection bool = false");
+        code.ShouldContain("{ token: '@@REPO_REF@@', value: base64(repoRefChecked) }");
+        code.ShouldContain("var repoRefIsPlaceholder = imageSource == 'build' && startsWith(repoRef, '<')");
+
+        var example = RepositoryFiles.WithoutComments("deploy/azure/vm.example.bicepparam");
+        example.ShouldContain("param repoRef = '<REPLACE-WITH-TAG-OR-SHA>'");
+        example.ShouldNotContain("param repoRef = 'main'");
+        RepositoryFiles.WithoutComments("deploy/azure/aci.bicep").ShouldContain("param enableFaultInjection bool = false");
+    }
+
+    [Fact]
+    public void TheVmSetup_KeepsTheCaPrivateKeyOutOfTheMountedDataFolder()
+    {
+        var code = RepositoryFiles.WithoutComments("deploy/azure/vm-setup.sh");
+
+        code.ShouldContain("readonly PKI_PRIVATE=$BASE/pki-private");
+        code.ShouldContain("install -m 0400 -o root -g root \"$folder/root-ca.key\" \"$PKI_PRIVATE/root-ca.key\"");
+        code.ShouldContain("reissue) prepare_folders; move_ca_key_out_of_data; reissue_certificate ;;");
+        code.ShouldContain("move_ca_key_out_of_data");
+
+        // The CLI container never sees $DATA, and nothing mounts $PKI_PRIVATE into a container that keeps running.
+        code.ShouldNotContain("-v \"$DATA:/data\" --entrypoint");
+        foreach (var line in code.Split('\n').Where(static l => l.Contains("--volume", StringComparison.Ordinal) || l.Contains(" -v ", StringComparison.Ordinal)))
+        {
+            line.ShouldNotContain("PKI_PRIVATE", customMessage: line);
+            line.ShouldNotContain("pki-private", customMessage: line);
+        }
+
+        // The key is never written under $DATA any more.
+        code.ShouldNotContain("--out /data/pki");
+        code.ShouldNotContain("$DATA/pki/root-ca.key\" \"$DATA");
+        Regex.Matches(code, @"root-ca\.key").Count.ShouldBeGreaterThan(0);
+        foreach (var line in code.Split('\n').Where(static l => l.Contains("root-ca.key", StringComparison.Ordinal) && l.Contains("install ", StringComparison.Ordinal)))
+        {
+            line.ShouldNotContain("$DATA/tls", customMessage: line);
+        }
+
+        RepositoryFiles.Read("docs/RUNBOOK.md").ShouldContain("/opt/ekmmock/pki-private/root-ca.key");
+        Read("deploy/azure/README.md").ShouldContain("/opt/ekmmock/pki-private/root-ca.key");
+    }
+
+    [Fact]
+    public void BothTemplates_BoundTheInspectorMemoryForTheirSmallSizes()
+    {
+        var vm = RepositoryFiles.WithoutComments("deploy/azure/vm-setup.sh");
+        vm.ShouldContain("readonly INSPECTOR_RING_BUFFER_SIZE=5000");
+        vm.ShouldContain("readonly INSPECTOR_MAX_BYTES=67108864");
+        vm.ShouldContain("Inspector__MaxBytes=$INSPECTOR_MAX_BYTES");
+        vm.ShouldContain("Inspector__RingBufferSize=$INSPECTOR_RING_BUFFER_SIZE");
+
+        var aci = RepositoryFiles.WithoutComments("deploy/azure/aci.bicep");
+        aci.ShouldContain("{ name: 'Inspector__MaxBytes', value: '33554432' }");
+        aci.ShouldContain("{ name: 'Inspector__RingBufferSize', value: '2000' }");
+        aci.ShouldContain("{ name: 'Inspector__ChannelCapacity', value: '1024' }");
+    }
+
+    [Fact]
+    public void TheAciStorageAccount_IsHardenedWhereTheMountAllowsIt_AndTheStorageKeyRiskIsDocumented()
+    {
+        var code = RepositoryFiles.WithoutComments("deploy/azure/aci.bicep");
+
+        code.ShouldContain("minimumTlsVersion: 'TLS1_2'");
+        code.ShouldContain("supportsHttpsTrafficOnly: true");
+        code.ShouldContain("allowBlobPublicAccess: false");
+        code.ShouldContain("allowSharedKeyAccess: true"); // the SMB mount needs the key
+        code.ShouldNotContain("networkAcls", customMessage: "a deny rule would break the ACI file share mount");
+        code.ShouldNotContain("defaultAction: 'Deny'");
+
+        foreach (var text in new[] { Read("deploy/azure/aci.bicep"), Read("deploy/azure/README.md") })
+        {
+            text.ShouldContain("storage account key", Case.Insensitive);
+            text.ShouldContain("Data Protection");
+            text.ShouldContain("forge");
+        }
+    }
+
+    [Fact]
+    public void TheE2eScript_KeepsTheBearerTokenOutOfArgv_RestrictsInsecureToLoopback_AndKeepsTheDekInAPrivateTempFolder()
+    {
+        var code = RepositoryFiles.WithoutComments("deploy/azure/e2e.sh");
+
+        code.ShouldNotContain("--header \"Authorization: Bearer");
+        code.ShouldContain("args+=(--config -)");
+        code.ShouldContain("printf 'header = \"Authorization: Bearer %s\"\\n' \"$EKMMOCK_CONSOLE_TOKEN\" | curl");
+        code.ShouldContain("console_is_loopback || die");
+        Regex.Matches(code, @"console_is_loopback \|\| die").Count.ShouldBe(2, "both the CLI options and the direct curl calls check the host");
+        code.ShouldContain("mktemp -d");
+        code.ShouldContain("umask 077");
     }
 }

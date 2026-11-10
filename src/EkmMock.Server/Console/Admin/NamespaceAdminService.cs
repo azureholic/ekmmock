@@ -180,26 +180,29 @@ internal sealed class NamespaceAdminService
                 $"The namespace still has {live.Count} key(s) that are not destroyed. Destroy them first, or confirm that deleting the namespace destroys all of them (irreversible).");
         }
 
+        // Audit first, change second, for every irreversible step (security review L3): each key destroy and the namespace delete are written before they are applied.
         foreach (var key in live)
         {
-            try
+            _audit.Intend(actor, AuditActions.KeyDestroy, $"key:{name}/{key.Name}", "irreversible crypto-shred, via namespace.delete", () =>
             {
-                _keys.Destroy(key.Ref, actor);
-            }
-            catch (EkmEngineException exception)
-            {
-                throw ConsoleActionException.From(exception);
-            }
-
-            _audit.Record(actor, AuditActions.KeyDestroy, $"key:{name}/{key.Name}", "irreversible crypto-shred, via namespace.delete");
+                try
+                {
+                    _keys.Destroy(key.Ref, actor);
+                }
+                catch (EkmEngineException exception)
+                {
+                    throw ConsoleActionException.From(exception);
+                }
+            });
         }
 
-        if (!_namespaces.Remove(existing.Name))
+        _audit.Intend(actor, AuditActions.NamespaceDelete, Target(name), $"destroyed_keys={live.Count}", () =>
         {
-            throw new ConsoleActionException(ConsoleErrorCode.NotFound, "Namespace not found.");
-        }
-
-        _audit.Record(actor, AuditActions.NamespaceDelete, Target(name), $"destroyed_keys={live.Count}");
+            if (!_namespaces.Remove(existing.Name))
+            {
+                throw new ConsoleActionException(ConsoleErrorCode.NotFound, "Namespace not found.");
+            }
+        });
         return live.Count;
     }
 
@@ -219,16 +222,18 @@ internal sealed class NamespaceAdminService
             return preview;
         }
 
-        try
+        // Trust decides who may call the endpoint, so the import is audited before it is applied (security review L3).
+        _audit.Intend(actor, AuditActions.TrustImport, Target(ns), $"mode={preview.Mode} format={preview.Format} cns={preview.ResultingSubjectCommonNames.Count} cas={preview.ResultingCaCount}", () =>
         {
-            _namespaces.SetTrust(ns, resulting);
-        }
-        catch (NamespaceException exception)
-        {
-            throw ConsoleActionException.From(exception);
-        }
-
-        _audit.Record(actor, AuditActions.TrustImport, Target(ns), $"mode={preview.Mode} format={preview.Format} cns={preview.ResultingSubjectCommonNames.Count} cas={preview.ResultingCaCount}");
+            try
+            {
+                _namespaces.SetTrust(ns, resulting);
+            }
+            catch (NamespaceException exception)
+            {
+                throw ConsoleActionException.From(exception);
+            }
+        });
         return preview with { Saved = true };
     }
 
@@ -242,16 +247,17 @@ internal sealed class NamespaceAdminService
             ? existing.ClientTrust.SubjectCommonNames
             : [.. existing.ClientTrust.SubjectCommonNames, ConsoleTestIdentity.CommonName];
 
-        try
+        _audit.Intend(actor, AuditActions.TrustTestClient, Target(ns), $"cn={ConsoleTestIdentity.CommonName}", () =>
         {
-            _namespaces.SetTrust(ns, new ClientTrust { SubjectCommonNames = cns, CaCertificatesDerBase64 = cas });
-        }
-        catch (NamespaceException exception)
-        {
-            throw ConsoleActionException.From(exception);
-        }
-
-        _audit.Record(actor, AuditActions.TrustTestClient, Target(ns), $"cn={ConsoleTestIdentity.CommonName}");
+            try
+            {
+                _namespaces.SetTrust(ns, new ClientTrust { SubjectCommonNames = cns, CaCertificatesDerBase64 = cas });
+            }
+            catch (NamespaceException exception)
+            {
+                throw ConsoleActionException.From(exception);
+            }
+        });
         return Get(ns);
     }
 

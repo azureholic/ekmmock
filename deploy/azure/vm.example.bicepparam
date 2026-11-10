@@ -16,16 +16,21 @@ param location = '<REPLACE-with-the-region-of-your-managed-hsm>'
 // The PUBLIC key that may log in (cat ~/.ssh/id_ed25519.pub). Not a secret.
 param sshPublicKey = '<REPLACE-with-your-ssh-PUBLIC-key-line-ssh-ed25519-AAAA-you@laptop>'
 
-// Your public IP address or CIDR (for example from https://ifconfig.me). There is no default and '*' is rejected.
+// Your public IP address (for example from https://ifconfig.me) or a narrow CIDR: ONE IPv4 address or an IPv4 range no wider than /16, one IPv6 address or a range no wider than /48.
+// There is no default; service tags such as 'Internet', '*', '0.0.0.0/0', host names and wider ranges are rejected (the deployment fails).
 param allowedSshSourceAddress = '<REPLACE-with-your-public-ip-address>'
 
 // Secret, from the environment (see above).
 param masterKey = readEnvironmentVariable('EKMMOCK_MASTER_KEY')
 
-// 'build' clones the repository on the VM and builds the image there (no image is published). Pin repoRef to a tag or a commit SHA for a reproducible deployment.
+// 'build' clones the repository on the VM and builds the image there (no image is published). repoRef has NO usable default: choose a release tag or a full 40-character commit SHA
+// (a branch such as 'main' works but is not reproducible). Left as the placeholder, a 'build' deployment fails on purpose.
 param imageSource = 'build'
 param repoUrl = 'https://github.com/azureholic/ekmmock.git'
-param repoRef = 'main'
+param repoRef = '<REPLACE-WITH-TAG-OR-SHA>'
+
+// Fault injection (delays, errors, HSM offline, blackhole; needed for the spec 15 scenarios) is OFF by default. Switch it on for those scenarios only.
+// param enableFaultInjection = true
 
 // Alternative: your own registry.
 // param imageSource = 'pull'

@@ -1,3 +1,4 @@
+using EkmMock.Pki;
 using EkmMock.Cli.Commands;
 using EkmMock.Cli.Infrastructure;
 

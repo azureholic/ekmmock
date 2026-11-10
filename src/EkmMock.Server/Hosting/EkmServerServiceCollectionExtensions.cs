@@ -84,6 +84,8 @@ internal static class EkmServerServiceCollectionExtensions
             .Validate(static o => o.IsValid(), "ProxyInfo values must not be empty")
             .ValidateOnStart();
         services.AddOptions<DataOptions>().BindConfiguration(DataOptions.SectionName);
+        services.AddOptions<AuditOptions>().BindConfiguration(AuditOptions.SectionName).ValidateOnStart();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<AuditOptions>, AuditOptionsValidator>());
         services.AddOptions<SelfTestSettings>().BindConfiguration(SelfTestSettings.SectionName);
         services.AddOptions<DevOptions>().BindConfiguration(DevOptions.SectionName);
         services.AddOptions<EkmEndpointOptions>().BindConfiguration(EkmEndpointOptions.SectionName);
