@@ -1334,5 +1334,9 @@ The server-wide Kestrel limit stays 16 KiB (the EKM endpoint needs it; `Endpoint
 ### I8: private keys written by the PKI library
 `IssuedCertificate.WriteFiles` (used by the tests, the console test hosts and the local tooling) now creates the key file through `SecureFile` (owner-only: Unix mode `0600`, a current-user-only ACL on Windows, applied at creation before any content is written); the helper moved from the CLI to `EkmMock.Pki` (the CLI references it from there). An existing key file is rewritten in place (so a certificate watcher never sees it missing) and, on Unix, tightened to `0600`. `PkiKeyFilePermissionsTests` (the Unix tightening case is skipped on Windows).
 
+### CI result of the follow-up
+
+- Run [42736629878](https://github.com/azureholic/ekmmock/actions/runs/42736629878) (commit db6d3fc, push to main): **green, all five jobs.** Linux: 2,292 tests (the 13 browser tests run in their own job), 2,288 passed, 0 failed, 4 skipped (the Windows-only CNG tests); Windows: 2,292 tests, 2,285 passed, 0 failed, 7 skipped (4 Linux-only cipher tests and the 3 Unix-mode tests); browser job 13 of 13; image build and conformance; Azure templates, including the new icep format step and SshSourceRuleTests with EKMMOCK_REQUIRE_BICEP=true (about 60 s). The two Bicep tests ran (did not skip) on both runners that have the CLI.
+
 ### Not changed (known and accepted)
 The INFO items of the review are unchanged. Specifically still true: the Data Protection keys are unencrypted files on the data volume (OPEN-QUESTIONS 63, now with the ACI storage-key consequence spelled out); the root-only cloud-init copy of the master key on the VM (72); the Azure templates were never deployed.

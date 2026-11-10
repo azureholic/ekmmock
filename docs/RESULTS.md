@@ -62,6 +62,8 @@ The last completed GitHub Actions run before this half is [42716589933](https://
 This half adds a fifth job, `azure-templates` (Bicep build and lint, example parameters, shellcheck, `e2e.sh --dry-run`). The result of the run for the commit that adds this file is recorded in the final report of the milestone and, once known, here: **CI result of M9 (2/2):** the first run for this half ([42723835243](https://github.com/azureholic/ekmmock/actions/runs/42723835243), commit `ef0b65e`) had four green jobs, including the new `azure-templates` job, and one red: the Linux job failed `CipherPolicyTests.Linux_AClientOfferingOnlyAes128_NegotiatesAes128_AndTheEventSaysSo`, an existing test that picked up the connection event of the previous test on a slow runner (a test race, fixed by selecting the event by the client port).
 The next run ([42725095395](https://github.com/azureholic/ekmmock/actions/runs/42725095395), commit `37bf49e`) is **green: all five jobs** (Linux build/test/vulnerability scan, Windows build/test, browser tests, image build and conformance, Azure templates).
 
+**CI result of the security review follow-up:** run [42736629878](https://github.com/azureholic/ekmmock/actions/runs/42736629878) (commit `db6d3fc`) is green, all five jobs (Linux 2,292 tests, 2,288 passed, 4 skipped; Windows 2,292 tests, 2,285 passed, 7 skipped; browser 13 of 13).
+
 ### 1.5 Benchmarks (spec 14 test 25)
 
 Measured with `ekmmock test bench`, Release build, `--dev`, TLS 1.3 + mTLS over loopback, **client and server on the same shared developer machine** (Intel i7-9700K, 8 logical CPUs, Windows 10.0.26300, .NET 10.0.14),
